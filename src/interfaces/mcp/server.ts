@@ -9,7 +9,7 @@ import type { WorkspaceGuard } from '../../infrastructure/security/workspace-gua
 import type { FileSkillRegistry } from '../../infrastructure/skills/file-skill-registry.js';
 import type { ModuleRegistry } from '../../infrastructure/catalog/module-registry.js';
 import type { ChecklistDocumentWriter } from '../../infrastructure/persistence/checklist-document-writer.js';
-import { toCreatePlanInput, toInteractionActions } from './input-normalizers.js';
+import { toClaimTaskInput, toCreatePlanInput, toInteractionActions, toListFileLocksFilter, toReleaseFileLocksInput } from './input-normalizers.js';
 
 interface Dependencies {
   workspaceRoot: string;
@@ -27,6 +27,7 @@ interface Dependencies {
 
 const workDomains = ['frontend', 'backend', 'design', 'responsive', 'threejs', 'motion', 'security', 'data', 'release'] as const;
 const checkpointIds = ['responsive', 'layout', 'interaction', 'typography-color', 'motion', '3d-rendering', 'accessibility', 'performance', 'security', 'final-regression'] as const;
+const ownedPathSchema = z.string().min(1).max(500);
 const viewportSchema = z.object({ name: z.string().min(1), width: z.number().int().min(240).max(7680), height: z.number().int().min(320).max(4320), isMobile: z.boolean(), hasTouch: z.boolean(), deviceScaleFactor: z.number().min(1).max(3) });
 const actionSchema = z.object({ action: z.enum(['click', 'fill', 'check', 'uncheck', 'select', 'press', 'expect-visible', 'expect-text']), selector: z.string().min(1), value: z.string().optional(), timeoutMs: z.number().int().min(500).max(120000).optional() });
 
@@ -35,6 +36,9 @@ function errorResult(error: unknown) { return { isError: true, content: [{ type:
 
 export function createMcpServer(deps: Dependencies): McpServer {
   const server = new McpServer({ name: 'principal-agentic-engineering-harness', version: '0.1.0' });
+  const assertWorkspacePaths = async (paths: readonly string[]) => {
+    await Promise.all(paths.map(target => deps.guard.resolvePotentialPathInsideWorkspace(target)));
+  };
 
   server.registerTool('harness.create_execution_plan', {
     description: 'Create a persistent task DAG for an engineering request. Returns parallel-ready workstreams, agent roles, Skill IDs, module references, and quality checkpoints. The host orchestrator must delegate ready tasks to native subagents.',
@@ -52,9 +56,45 @@ export function createMcpServer(deps: Dependencies): McpServer {
   }, async ({ planId }) => { try { return result(await deps.taskService.getReadyTasks(planId)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('harness.claim_task', {
-    description: 'Claim a ready task for one agent. Prevents duplicate concurrent ownership.',
-    inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100) })
-  }, async ({ taskId, agentId }) => { try { return result(await deps.taskService.claimTask(taskId, agentId)); } catch (error) { return errorResult(error); } });
+    description: 'Claim a ready task for one agent and optionally acquire exclusive write locks on workspace-relative ownedPaths. Rejects duplicate task ownership and overlapping active file locks.',
+    inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), ownedPaths: z.array(ownedPathSchema).max(200).optional() })
+  }, async input => { try {
+    const normalized = toClaimTaskInput(input);
+    if (normalized.ownedPaths) await assertWorkspacePaths(normalized.ownedPaths);
+    const task = await deps.taskService.claimTask(normalized.taskId, normalized.agentId, normalized.ownedPaths);
+    await deps.checklistWriter.write(task.planId);
+    return result(task);
+  } catch (error) { return errorResult(error); } });
+
+  server.registerTool('harness.acquire_file_locks', {
+    description: 'Acquire exclusive path-level write locks for a claimed in-progress task. Rejects conflicting or overlapping paths held by another active task.',
+    inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200) })
+  }, async ({ taskId, agentId, paths }) => { try {
+    await assertWorkspacePaths(paths);
+    const acquired = await deps.taskService.acquireFileLocks(taskId, agentId, paths);
+    const checklistPath = await deps.checklistWriter.write(acquired.task.planId);
+    return result({ ...acquired, checklistPath });
+  } catch (error) { return errorResult(error); } });
+
+  server.registerTool('harness.release_file_locks', {
+    description: 'Release path-level file locks owned by the claiming agent on an in-progress task (or all locks held by that task when paths is omitted).',
+    inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200).optional() })
+  }, async input => { try {
+    const normalized = toReleaseFileLocksInput(input);
+    if (normalized.paths) await assertWorkspacePaths(normalized.paths);
+    const released = await deps.taskService.releaseFileLocks(normalized.taskId, normalized.agentId, normalized.paths);
+    const checklistPath = await deps.checklistWriter.write(released.task.planId);
+    return result({ ...released, checklistPath });
+  } catch (error) { return errorResult(error); } });
+
+  server.registerTool('harness.list_file_locks', {
+    description: 'List active path-level file locks, optionally filtered by planId, taskId, or overlapping workspace path.',
+    inputSchema: z.object({ planId: z.string().uuid().optional(), taskId: z.string().uuid().optional(), path: ownedPathSchema.optional() })
+  }, async input => { try {
+    const filter = toListFileLocksFilter(input);
+    if (filter.path !== undefined) deps.guard.resolveInsideWorkspace(filter.path);
+    return result(await deps.taskService.listFileLocks(filter));
+  } catch (error) { return errorResult(error); } });
 
   server.registerTool('harness.complete_task', {
     description: 'Complete, block, or fail a claimed task. Completed tasks that require evidence must include at least one existing evidence ID.',
@@ -183,7 +223,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     title: 'Principal Orchestrator Workflow',
     description: 'Plan and coordinate a project task using parallel subagents, Skills, MCP tools and independent verification.',
     argsSchema: z.object({ request: z.string().min(10), projectRoot: z.string().optional() })
-  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse harness.create_execution_plan, delegate dependency-ready tasks to host-native subagents, preserve file ownership, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
+  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse harness.create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via harness.acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
 
   return server;
 }

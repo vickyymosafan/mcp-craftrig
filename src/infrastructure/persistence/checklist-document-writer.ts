@@ -14,6 +14,7 @@ export class ChecklistDocumentWriter {
     const directory = await this.guard.ensureEvidenceDirectory('.harness/checklists');
     const target = path.join(directory, `${planId}.md`);
     const evidence = await this.tasks.getEvidenceForPlan(planId);
+    const fileLocks = await this.tasks.listFileLocks({ planId });
 
     try {
       const existing = await lstat(target);
@@ -32,13 +33,21 @@ export class ChecklistDocumentWriter {
       '',
       '## Execution tasks',
       '',
-      '| Task | Role | Status | Evidence | Failure / Block reason |',
-      '|---|---|---|---|---|'
+      '| Task | Role | Claimed by | Owned paths | Status | Evidence | Failure / Block reason |',
+      '|---|---|---|---|---|---|---|'
     ];
 
     for (const task of snapshot.tasks) {
       const evidenceIds = task.evidenceIds.map(id => `\`${id}\``).join(', ') || 'None';
-      lines.push(`| ${markdownCell(task.title)} | ${markdownCell(task.ownerRole)} | ${task.status.toUpperCase()} | ${evidenceIds} | ${markdownCell(task.failureReason ?? '')} |`);
+      const ownedPaths = (task.ownedPaths ?? []).map(p => `\`${markdownCell(p)}\``).join(', ') || 'Unassigned';
+      const claimedBy = task.claimedBy ? markdownCell(task.claimedBy) : 'Unclaimed';
+      lines.push(`| ${markdownCell(task.title)} | ${markdownCell(task.ownerRole)} | ${claimedBy} | ${ownedPaths} | ${task.status.toUpperCase()} | ${evidenceIds} | ${markdownCell(task.failureReason ?? '')} |`);
+    }
+
+    lines.push('', '## Active file locks', '', '| Path | Agent | Task ID | Acquired |', '|---|---|---|---|');
+    if (fileLocks.length === 0) lines.push('| None | | No active file locks | |');
+    for (const lock of fileLocks) {
+      lines.push(`| \`${markdownCell(lock.path)}\` | ${markdownCell(lock.agentId)} | \`${lock.taskId}\` | ${lock.acquiredAt} |`);
     }
 
     lines.push('', '## Quality checkpoints', '', '| Quality dimension | Required | Status | Evidence IDs | Reason |', '|---|---:|---|---|---|');

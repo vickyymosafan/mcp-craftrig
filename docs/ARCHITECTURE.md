@@ -38,9 +38,9 @@ Dependency rules:
 - MCP: tools and evidence operations. It does not create LLM instances by itself.
 - Skills: portable operating procedures selected by the orchestrator.
 
-## 4. Task graph
+## 4. Task graph and file ownership locking
 
-Tasks are persisted with UUIDs, explicit dependencies, owner role, Skill IDs, module IDs, status, evidence IDs, and timestamps. `get_ready_tasks` returns tasks whose dependencies are all completed. `claim_task` prevents duplicate ownership in the single MCP process. Parallel workers should claim separate tasks and avoid shared write ownership.
+Tasks are persisted with UUIDs, explicit dependencies, owner role, Skill IDs, module IDs, explicit `ownedPaths`, status, evidence IDs, and timestamps. `get_ready_tasks` returns tasks whose dependencies are all completed. `claim_task` prevents duplicate task ownership and enforces path-level write locking across active tasks in the single MCP process (detecting exact matches and parent/child directory overlaps). Additional paths can be acquired or inspected mid-task with `acquire_file_locks`, `release_file_locks`, and `list_file_locks`; active locks are released automatically when a task completes, fails, blocks, or reopens.
 
 The current JSON repository is intended for one local MCP process. Multi-process or team deployment requires a transactional database and distributed locking.
 

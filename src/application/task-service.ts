@@ -1,11 +1,63 @@
 import { randomUUID } from 'node:crypto';
 import type { StateRepository } from '../domain/ports.js';
-import type { EvidenceRecord, ExecutionPlan, QualityCheckpoint, TaskNode, TaskStatus } from '../domain/models.js';
+import type { EvidenceRecord, ExecutionPlan, FileLockRecord, HarnessState, QualityCheckpoint, ServerProcessRecord, TaskNode, TaskStatus } from '../domain/models.js';
 import { QUALITY_DIMENSIONS } from '../domain/models.js';
 import { ConflictError, NotFoundError, ValidationError } from '../domain/errors.js';
+import { findLockConflict, normalizeOwnedPath, normalizeOwnedPaths, pathsOverlap } from '../domain/file-ownership.js';
 import { TaskPlanner, type CreatePlanInput } from './task-planner.js';
 
 const now = () => new Date().toISOString();
+
+function ensureFileLocks(state: HarnessState): Record<string, FileLockRecord> {
+  return (state.fileLocks ??= {});
+}
+
+function acquireTaskLocks(
+  state: HarnessState,
+  task: TaskNode,
+  agentId: string,
+  pathsToLock: readonly string[],
+  timestamp: string
+): string[] {
+  const normalized = normalizeOwnedPaths(pathsToLock);
+  const fileLocks = ensureFileLocks(state);
+  const activeLocks = Object.values(fileLocks);
+
+  for (const candidate of normalized) {
+    const conflict = findLockConflict(candidate, activeLocks, task.id);
+    if (conflict) {
+      throw new ConflictError(
+        `File ownership conflict: "${candidate}" overlaps with active lock "${conflict.path}" held by agent "${conflict.agentId}" on task "${conflict.taskId}".`
+      );
+    }
+  }
+
+  for (const candidate of normalized) {
+    fileLocks[candidate] = {
+      path: candidate,
+      planId: task.planId,
+      taskId: task.id,
+      agentId,
+      acquiredAt: timestamp
+    };
+  }
+  return normalized;
+}
+
+function releaseLocksForTasks(state: HarnessState, taskIds: ReadonlySet<string>): void {
+  const fileLocks = ensureFileLocks(state);
+  for (const [lockPath, lock] of Object.entries(fileLocks)) {
+    if (taskIds.has(lock.taskId)) {
+      delete fileLocks[lockPath];
+    }
+  }
+}
+
+export interface ListFileLocksFilter {
+  planId?: string;
+  taskId?: string;
+  path?: string;
+}
 
 export class TaskService {
   constructor(private readonly repository: StateRepository, private readonly planner = new TaskPlanner()) {}
@@ -52,7 +104,7 @@ export class TaskService {
     );
   }
 
-  async claimTask(taskId: string, agentId: string): Promise<TaskNode> {
+  async claimTask(taskId: string, agentId: string, ownedPaths?: readonly string[]): Promise<TaskNode> {
     if (!agentId.trim()) throw new ValidationError('agentId must not be empty.');
     return this.repository.transact(state => {
       const task = state.tasks[taskId];
@@ -60,10 +112,76 @@ export class TaskService {
       if (task.status !== 'pending') throw new ConflictError(`Task cannot be claimed from status ${task.status}.`);
       const blockedBy = task.dependsOn.filter(id => state.tasks[id]?.status !== 'completed');
       if (blockedBy.length) throw new ConflictError(`Task dependencies are not complete: ${blockedBy.join(', ')}`);
-      const updated: TaskNode = { ...task, status: 'in_progress', claimedBy: agentId, updatedAt: now() };
+      const timestamp = now();
+      const targetPaths = ownedPaths !== undefined ? ownedPaths : (task.ownedPaths ?? []);
+      const lockedPaths = acquireTaskLocks(state, task, agentId, targetPaths, timestamp);
+      const updated: TaskNode = { ...task, ownedPaths: lockedPaths, status: 'in_progress', claimedBy: agentId, updatedAt: timestamp };
       state.tasks[taskId] = updated;
+      const plan = state.plans[task.planId];
+      if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
       return updated;
     });
+  }
+
+  async acquireFileLocks(taskId: string, agentId: string, paths: readonly string[]): Promise<{ task: TaskNode; locks: FileLockRecord[] }> {
+    if (!agentId.trim()) throw new ValidationError('agentId must not be empty.');
+    if (paths.length === 0) throw new ValidationError('At least one workspace-relative path is required.');
+    return this.repository.transact(state => {
+      const task = state.tasks[taskId];
+      if (!task) throw new NotFoundError('Task', taskId);
+      if (task.status !== 'in_progress') throw new ConflictError(`Task must be in_progress to acquire file locks. Current: ${task.status}`);
+      if (task.claimedBy !== agentId) throw new ConflictError(`Task is claimed by "${task.claimedBy ?? 'unassigned'}", not "${agentId}".`);
+      const timestamp = now();
+      const acquiredPaths = acquireTaskLocks(state, task, agentId, paths, timestamp);
+      const ownedPaths = [...new Set([...(task.ownedPaths ?? []), ...acquiredPaths])];
+      const updated: TaskNode = { ...task, ownedPaths, updatedAt: timestamp };
+      state.tasks[taskId] = updated;
+      const plan = state.plans[task.planId];
+      if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
+      const fileLocks = ensureFileLocks(state);
+      return { task: updated, locks: acquiredPaths.map(lockPath => fileLocks[lockPath]!) };
+    });
+  }
+
+  async releaseFileLocks(taskId: string, agentId: string, paths?: readonly string[]): Promise<{ task: TaskNode; releasedPaths: string[] }> {
+    if (!agentId.trim()) throw new ValidationError('agentId must not be empty.');
+    if (paths !== undefined && paths.length === 0) {
+      throw new ValidationError('When paths are provided to release, at least one path is required.');
+    }
+    return this.repository.transact(state => {
+      const task = state.tasks[taskId];
+      if (!task) throw new NotFoundError('Task', taskId);
+      if (task.status !== 'in_progress') throw new ConflictError(`Task must be in_progress to release file locks. Current: ${task.status}`);
+      if (task.claimedBy !== agentId) throw new ConflictError(`Task is claimed by "${task.claimedBy ?? 'unassigned'}", not "${agentId}".`);
+      const fileLocks = ensureFileLocks(state);
+      const targetSet = paths !== undefined ? new Set(normalizeOwnedPaths(paths)) : null;
+      const releasedPaths: string[] = [];
+      for (const [lockPath, lock] of Object.entries(fileLocks)) {
+        if (lock.taskId === taskId && (targetSet === null || targetSet.has(lockPath))) {
+          delete fileLocks[lockPath];
+          releasedPaths.push(lockPath);
+        }
+      }
+      const nextOwned = targetSet === null
+        ? []
+        : (task.ownedPaths ?? []).filter(ownedPath => !targetSet.has(ownedPath));
+      const timestamp = now();
+      const updated: TaskNode = { ...task, ownedPaths: nextOwned, updatedAt: timestamp };
+      state.tasks[taskId] = updated;
+      const plan = state.plans[task.planId];
+      if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
+      return { task: updated, releasedPaths: releasedPaths.sort() };
+    });
+  }
+
+  async listFileLocks(filter?: ListFileLocksFilter): Promise<FileLockRecord[]> {
+    const targetPath = filter?.path !== undefined ? normalizeOwnedPath(filter.path) : null;
+    const state = await this.repository.read();
+    return Object.values(state.fileLocks ?? {})
+      .filter(lock => (filter?.planId ? lock.planId === filter.planId : true))
+      .filter(lock => (filter?.taskId ? lock.taskId === filter.taskId : true))
+      .filter(lock => (targetPath !== null ? pathsOverlap(lock.path, targetPath) : true))
+      .sort((a, b) => a.path.localeCompare(b.path));
   }
 
   async completeTask(taskId: string, status: Extract<TaskStatus, 'completed' | 'blocked' | 'failed'>, evidenceIds: string[] = [], reason: string | null = null): Promise<TaskNode> {
@@ -77,10 +195,12 @@ export class TaskService {
       if (missing.length) throw new ValidationError(`Unknown evidence IDs: ${missing.join(', ')}`);
       const unrelated = evidenceIds.filter(id => { const item = state.evidence[id]!; return item.planId !== task.planId || (item.taskId !== null && item.taskId !== taskId); });
       if (unrelated.length) throw new ValidationError(`Evidence must belong to this plan and may only be linked to this task: ${unrelated.join(', ')}`);
-      const updated: TaskNode = { ...task, status, evidenceIds: [...new Set([...task.evidenceIds, ...evidenceIds])], failureReason: reason, completedAt: status === 'completed' ? now() : null, updatedAt: now() };
+      releaseLocksForTasks(state, new Set([taskId]));
+      const timestamp = now();
+      const updated: TaskNode = { ...task, status, evidenceIds: [...new Set([...task.evidenceIds, ...evidenceIds])], failureReason: reason, completedAt: status === 'completed' ? timestamp : null, updatedAt: timestamp };
       state.tasks[taskId] = updated;
       const plan = state.plans[task.planId];
-      if (plan) state.plans[task.planId] = { ...plan, updatedAt: now() };
+      if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
       return updated;
     });
   }
@@ -193,10 +313,11 @@ export class TaskService {
           }
         }
       }
+      releaseLocksForTasks(state, affected);
       const reopened: TaskNode[] = [];
       for (const id of affected) {
         const current = state.tasks[id]!;
-        const updated: TaskNode = { ...current, status: 'pending', evidenceIds: [], claimedBy: null, completedAt: null, failureReason: reason, updatedAt: now() };
+        const updated: TaskNode = { ...current, ownedPaths: [], status: 'pending', evidenceIds: [], claimedBy: null, completedAt: null, failureReason: reason, updatedAt: now() };
         state.tasks[id] = updated;
         reopened.push(updated);
       }
@@ -218,11 +339,11 @@ export class TaskService {
     return record;
   }
 
-  async registerServerProcess(record: HarnessStateProcessInput): Promise<void> {
+  async registerServerProcess(record: ServerProcessRecord): Promise<void> {
     await this.repository.transact(state => { state.serverProcesses[record.id] = record; });
   }
 
-  async updateServerProcess(id: string, patch: Partial<HarnessStateProcessInput>): Promise<void> {
+  async updateServerProcess(id: string, patch: Partial<ServerProcessRecord>): Promise<void> {
     await this.repository.transact(state => {
       const current = state.serverProcesses[id];
       if (!current) throw new NotFoundError('Server process', id);
@@ -230,6 +351,3 @@ export class TaskService {
     });
   }
 }
-
-import type { ServerProcessRecord } from '../domain/models.js';
-type HarnessStateProcessInput = ServerProcessRecord;

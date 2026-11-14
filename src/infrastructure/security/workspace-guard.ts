@@ -26,32 +26,20 @@ export class WorkspaceGuard {
     return realTarget;
   }
 
+  async resolvePotentialPathInsideWorkspace(relativePath: string): Promise<string> {
+    const resolved = this.resolveInsideWorkspace(relativePath);
+    const realRoot = await realpath(this.root);
+    await this.assertSafeAncestor(resolved, realRoot, 'Path', false);
+    return resolved;
+  }
+
   async ensureEvidenceDirectory(relativeDirectory = '.harness/evidence'): Promise<string> {
     const resolved = this.resolveInsideWorkspace(relativeDirectory);
     const realRoot = await realpath(this.root);
 
     // Resolve the closest existing ancestor before mkdir so a symlink cannot
     // redirect directory creation outside the configured workspace.
-    let ancestor = resolved;
-    while (true) {
-      try {
-        const [realAncestor, details] = await Promise.all([realpath(ancestor), lstat(ancestor)]);
-        const relative = path.relative(realRoot, realAncestor);
-        if (relative.startsWith('..') || path.isAbsolute(relative)) {
-          throw new ValidationError('Evidence directory resolves outside the workspace.');
-        }
-        if (!details.isDirectory() && !details.isSymbolicLink()) {
-          throw new ValidationError('Evidence directory path contains a non-directory component.');
-        }
-        break;
-      } catch (error) {
-        if (error instanceof ValidationError) throw error;
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        const parent = path.dirname(ancestor);
-        if (parent === ancestor) throw error;
-        ancestor = parent;
-      }
-    }
+    await this.assertSafeAncestor(resolved, realRoot, 'Evidence directory', true);
 
     await mkdir(resolved, { recursive: true });
     const realTarget = await realpath(resolved);
@@ -61,6 +49,42 @@ export class WorkspaceGuard {
     }
     if (!(await stat(realTarget)).isDirectory()) throw new ValidationError('Evidence path must be a directory.');
     return realTarget;
+  }
+
+  private async assertSafeAncestor(resolved: string, realRoot: string, label: string, requireDirectory: boolean): Promise<void> {
+    let ancestor = resolved;
+    while (true) {
+      let details;
+      try {
+        details = await lstat(ancestor);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) throw error;
+        ancestor = parent;
+        continue;
+      }
+
+      let realAncestor: string;
+      try {
+        realAncestor = await realpath(ancestor);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT' && details.isSymbolicLink()) {
+          throw new ValidationError(`${label} traverses a broken symbolic link.`);
+        }
+        throw error;
+      }
+
+      const relative = path.relative(realRoot, realAncestor);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new ValidationError(`${label} resolves outside the workspace.`);
+      }
+      const mustBeDirectory = requireDirectory || ancestor !== resolved;
+      if (mustBeDirectory && !details.isDirectory() && !details.isSymbolicLink()) {
+        throw new ValidationError(`${label} path contains a non-directory component.`);
+      }
+      return;
+    }
   }
 }
 

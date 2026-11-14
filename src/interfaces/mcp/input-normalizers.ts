@@ -1,4 +1,5 @@
 import type { CreatePlanInput } from '../../application/task-planner.js';
+import type { ListFileLocksFilter } from '../../application/task-service.js';
 import type { InteractionAction } from '../../domain/ports.js';
 import type { WorkDomain } from '../../domain/models.js';
 
@@ -12,6 +13,24 @@ export interface CreatePlanToolInput {
   request: string;
   domains?: WorkDomain[] | undefined;
   maxRepairIterations?: number | undefined;
+}
+
+export interface ClaimTaskToolInput {
+  taskId: string;
+  agentId: string;
+  ownedPaths?: string[] | undefined;
+}
+
+export interface ReleaseFileLocksToolInput {
+  taskId: string;
+  agentId: string;
+  paths?: string[] | undefined;
+}
+
+export interface ListFileLocksToolInput {
+  planId?: string | undefined;
+  taskId?: string | undefined;
+  path?: string | undefined;
 }
 
 export interface InteractionActionToolInput {
@@ -30,6 +49,33 @@ export function toCreatePlanInput(input: CreatePlanToolInput): CreatePlanInput {
     ...(input.maxRepairIterations !== undefined
       ? { maxRepairIterations: input.maxRepairIterations }
       : {})
+  };
+}
+
+/** Remove absent ownedPaths before crossing into TaskService. */
+export function toClaimTaskInput(input: ClaimTaskToolInput): { taskId: string; agentId: string; ownedPaths?: string[] } {
+  return {
+    taskId: input.taskId,
+    agentId: input.agentId,
+    ...(input.ownedPaths !== undefined ? { ownedPaths: input.ownedPaths } : {})
+  };
+}
+
+/** Remove absent paths before releasing file locks in TaskService. */
+export function toReleaseFileLocksInput(input: ReleaseFileLocksToolInput): { taskId: string; agentId: string; paths?: string[] } {
+  return {
+    taskId: input.taskId,
+    agentId: input.agentId,
+    ...(input.paths !== undefined ? { paths: input.paths } : {})
+  };
+}
+
+/** Remove absent filter fields before listing active file locks. */
+export function toListFileLocksFilter(input: ListFileLocksToolInput): ListFileLocksFilter {
+  return {
+    ...(input.planId !== undefined ? { planId: input.planId } : {}),
+    ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+    ...(input.path !== undefined ? { path: input.path } : {})
   };
 }
 

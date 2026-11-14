@@ -5,7 +5,8 @@
 - [ ] Host can list the registered tools, prompt, and architecture resource.
 - [ ] Plan creation persists tasks and checkpoints.
 - [ ] Ready-task discovery respects dependencies.
-- [ ] Duplicate task claims are rejected.
+- [ ] Duplicate task claims and overlapping active path-level file locks (`ownedPaths`) are rejected.
+- [ ] Active file locks are released automatically on task completion, failure, blocking, or reopen, and can only be released early by the claiming agent.
 - [ ] Task completion requiring evidence is rejected without evidence IDs.
 - [ ] PASS checkpoint is rejected without evidence.
 - [ ] NOT_APPLICABLE is rejected without a rationale.

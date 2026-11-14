@@ -38,9 +38,17 @@ export class JsonStateRepository implements StateRepository {
   private async readUnsafe(): Promise<HarnessState> {
     try {
       const raw = await readFile(this.stateFile, 'utf8');
-      const parsed = JSON.parse(raw) as HarnessState;
+      const parsed = JSON.parse(raw) as Partial<HarnessState>;
       if (parsed.schemaVersion !== 1) throw new Error(`Unsupported state schema version: ${String(parsed.schemaVersion)}`);
-      return parsed;
+      const tasks = Object.fromEntries(
+        Object.entries(parsed.tasks ?? {}).map(([id, task]) => [id, { ...task, ownedPaths: task.ownedPaths ?? [] }])
+      );
+      return {
+        ...structuredClone(EMPTY_STATE),
+        ...parsed,
+        tasks,
+        fileLocks: parsed.fileLocks ?? {}
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return structuredClone(EMPTY_STATE);
       throw error;

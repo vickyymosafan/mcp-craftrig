@@ -12,11 +12,11 @@ Represent work as a directed acyclic graph. A task may start only when all depen
 ## Delegation process
 1. Read the task and project context.
 2. Decompose by independently verifiable outcomes, not by arbitrary file count.
-3. Identify dependencies and shared-file conflicts.
-4. Assign one owner role per task and explicit write ownership.
-5. Group independent tasks into parallel batches.
-6. Send each subagent a bounded context packet.
-7. Collect structured results and evidence.
+3. Identify dependencies and shared-file conflicts (`harness.list_file_locks`).
+4. Assign one owner role per task and lock explicit write ownership via `harness.claim_task` (`ownedPaths`) or `harness.acquire_file_locks`.
+5. Group independent tasks with disjoint owned paths into parallel batches.
+6. Send each subagent a bounded context packet listing its locked paths.
+7. Collect structured results and evidence; locks release automatically on `harness.complete_task` or `harness.reopen_task` (or explicitly via `harness.release_file_locks`).
 8. Run integration and regression checks.
 
 ## Subagent output contract

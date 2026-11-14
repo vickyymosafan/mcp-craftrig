@@ -27,10 +27,15 @@ function inferDomains(request: string): WorkDomain[] {
   return found.length > 0 ? [...new Set(found)] : ['frontend'];
 }
 
-function createTask(planId: string, partial: Omit<TaskNode, 'id' | 'planId' | 'status' | 'evidenceIds' | 'claimedBy' | 'createdAt' | 'updatedAt' | 'completedAt' | 'failureReason'>): TaskNode {
+type PlannerTaskDraft = Omit<
+  TaskNode,
+  'id' | 'planId' | 'ownedPaths' | 'status' | 'evidenceIds' | 'claimedBy' | 'createdAt' | 'updatedAt' | 'completedAt' | 'failureReason'
+> & { ownedPaths?: string[] };
+
+function createTask(planId: string, partial: PlannerTaskDraft): TaskNode {
   const timestamp = now();
   return {
-    id: randomUUID(), planId, ...partial, status: 'pending', evidenceIds: [], claimedBy: null,
+    id: randomUUID(), planId, ...partial, ownedPaths: partial.ownedPaths ?? [], status: 'pending', evidenceIds: [], claimedBy: null,
     createdAt: timestamp, updatedAt: timestamp, completedAt: null, failureReason: null
   };
 }

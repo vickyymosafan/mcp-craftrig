@@ -86,7 +86,10 @@ See `docs/LOCALHOST_QA.md` for detailed acceptance rules, `docs/PRINCIPAL_DEVELO
 - `harness.create_execution_plan`
 - `harness.get_execution_plan`
 - `harness.get_ready_tasks`
-- `harness.claim_task`
+- `harness.claim_task` (supports optional `ownedPaths` for path-level file locking)
+- `harness.acquire_file_locks`
+- `harness.release_file_locks`
+- `harness.list_file_locks`
 - `harness.complete_task`
 - `harness.record_evidence`
 - `harness.update_quality_checkpoint`

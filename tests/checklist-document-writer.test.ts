@@ -21,7 +21,12 @@ test('generated checklist includes execution tasks, checkpoint states and eviden
     const tasks = new TaskService(new MemoryRepository());
     const plan = await tasks.createPlan({ title: 'Responsive portfolio', request: 'Build a responsive portfolio website' });
     const discovery = plan.tasks[0]!;
-    await tasks.claimTask(discovery.id, 'discovery-agent');
+    await tasks.claimTask(discovery.id, 'discovery-agent', ['src/index.ts']);
+    const writer = new ChecklistDocumentWriter(tasks, new WorkspaceGuard(root));
+    const activeChecklist = await readFile(path.join(root, await writer.write(plan.plan.id)), 'utf8');
+    assert.match(activeChecklist, /## Active file locks/);
+    assert.match(activeChecklist, /`src\/index\.ts`/);
+
     const evidence = await tasks.recordEvidence({
       planId: plan.plan.id,
       taskId: discovery.id,
@@ -36,11 +41,12 @@ test('generated checklist includes execution tasks, checkpoint states and eviden
     await tasks.completeTask(discovery.id, 'completed', [evidence.id]);
     await tasks.updateCheckpoint(plan.plan.id, 'responsive', 'pass', [evidence.id], null);
 
-    const writer = new ChecklistDocumentWriter(tasks, new WorkspaceGuard(root));
     const relativePath = await writer.write(plan.plan.id);
     const document = await readFile(path.join(root, relativePath), 'utf8');
     assert.match(document, /## Execution tasks/);
     assert.match(document, /DISCOVERY-AGENT|discovery-lead/i);
+    assert.match(document, /## Active file locks/);
+    assert.match(document, /No active file locks/);
     assert.match(document, /## Quality checkpoints/);
     assert.match(document, /Responsive \| Yes \| PASS/);
     assert.match(document, /Discovery acceptance report/);

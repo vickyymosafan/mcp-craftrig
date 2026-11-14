@@ -71,6 +71,8 @@ test('workspace guard rejects evidence and directory creation redirected by syml
 
     const guard = new WorkspaceGuard(await realpath(root));
     await assert.rejects(() => guard.resolveExistingFileInsideWorkspace('external-link/secret.txt'));
+    await assert.rejects(() => guard.resolvePotentialPathInsideWorkspace('external-link/new-file.ts'));
+    await assert.doesNotReject(() => guard.resolvePotentialPathInsideWorkspace('new-folder/new-file.ts'));
     await assert.rejects(() => guard.ensureEvidenceDirectory('.harness/evidence'));
     await assert.rejects(() => guard.ensureEvidenceDirectory('external-link/new-evidence'));
     await assert.rejects(() => import('node:fs/promises').then(fs => fs.access(path.join(outside, 'evidence'))));

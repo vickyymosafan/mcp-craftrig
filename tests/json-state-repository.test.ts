@@ -39,3 +39,34 @@ test('JSON state repository serializes concurrent transactions in one process', 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('JSON state repository normalizes legacy v1 state lacking fileLocks and ownedPaths', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'principal-harness-legacy-'));
+  const stateFile = path.join(root, 'state.json');
+  try {
+    const legacy = {
+      schemaVersion: 1,
+      plans: {},
+      tasks: {
+        'task-1': {
+          id: 'task-1', planId: 'plan-1', title: 'Legacy task', description: 'Legacy',
+          ownerRole: 'frontend-developer', skillIds: [], moduleIds: [], domains: ['frontend'],
+          dependsOn: [], status: 'pending', parallelGroup: null, requiredEvidence: true,
+          evidenceIds: [], claimedBy: null, createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z', completedAt: null, failureReason: null
+        }
+      },
+      checkpoints: {},
+      evidence: {},
+      serverProcesses: {}
+    };
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(stateFile, JSON.stringify(legacy), 'utf8');
+    const repository = new JsonStateRepository(stateFile);
+    const loaded = await repository.read();
+    assert.deepEqual(loaded.fileLocks, {});
+    assert.deepEqual(loaded.tasks['task-1']?.ownedPaths, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

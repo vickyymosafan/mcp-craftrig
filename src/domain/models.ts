@@ -3,6 +3,14 @@ export type CheckpointStatus = 'pending' | 'pass' | 'fail' | 'blocked' | 'not_ap
 export type EvidenceKind = 'browser-report' | 'screenshot' | 'test-report' | 'build-log' | 'security-report' | 'manual-review' | 'other';
 export type WorkDomain = 'frontend' | 'backend' | 'design' | 'responsive' | 'threejs' | 'motion' | 'security' | 'data' | 'release';
 
+export interface FileLockRecord {
+  path: string;
+  planId: string;
+  taskId: string;
+  agentId: string;
+  acquiredAt: string;
+}
+
 export interface TaskNode {
   id: string;
   planId: string;
@@ -13,6 +21,7 @@ export interface TaskNode {
   moduleIds: number[];
   domains: WorkDomain[];
   dependsOn: string[];
+  ownedPaths: string[];
   status: TaskStatus;
   parallelGroup: string | null;
   requiredEvidence: boolean;
@@ -79,12 +88,13 @@ export interface HarnessState {
   tasks: Record<string, TaskNode>;
   checkpoints: Record<string, QualityCheckpoint>;
   evidence: Record<string, EvidenceRecord>;
+  fileLocks: Record<string, FileLockRecord>;
   serverProcesses: Record<string, ServerProcessRecord>;
 }
 
 export const EMPTY_STATE: HarnessState = {
   schemaVersion: 1,
-  plans: {}, tasks: {}, checkpoints: {}, evidence: {}, serverProcesses: {}
+  plans: {}, tasks: {}, checkpoints: {}, evidence: {}, fileLocks: {}, serverProcesses: {}
 };
 
 export const QUALITY_DIMENSIONS = [
