@@ -52,14 +52,43 @@ Use snappy, modern spring-like easing curves instead of generic linear or standa
 
 ---
 
-## 3. Performance & 60 FPS Frame Budget
-- Stick strictly to GPU-accelerated properties: `transform` and `opacity`.
-- Never animate `width`, `height`, `top`, `left`, `margin`, or `padding` in loops, as they trigger expensive layout reflows and frame drops.
-- Always throttle continuous canvas animation loops (such as waveforms or 3D scenes) when the tab is hidden or element is off-screen.
+## 3. Fast-Path Compositor Scrolling & Scroll-Driven Animations
+1. **Never use `body { overflow-x: hidden }`:**
+   Setting `overflow-x: hidden` on `body` or `html` forces Chromium to establish a non-fast-path scrolling root, causing severe scroll stutter. Always use `overflow: clip` or `overflow-x: clip` to eliminate horizontal scrollbars without breaking native compositor thread scrolling.
+2. **Off-Thread CSS Scroll-Driven Animations:**
+   Never use JavaScript `window.addEventListener('scroll', ...)` or heavy JS animation libraries for scroll reveals. Use native CSS Scroll-Driven Animations:
+   ```css
+   @keyframes scrollReveal {
+     from { opacity: 0; transform: translateY(24px); }
+     to { opacity: 1; transform: translateY(0); }
+   }
+   .reveal-on-scroll {
+     animation: scrollReveal linear both;
+     animation-timeline: view();
+     animation-range: entry 10% cover 30%;
+   }
+   ```
+3. **GPU Fillrate Budget (Glassmorphism):**
+   Stacked `backdrop-filter: blur(...)` across multiple scrolling cards or grid items exhausts GPU fillrate and drops frames. Limit `backdrop-filter` to fixed navigation headers or modal overlays; use semi-translucent solid tokens (`rgba(15, 23, 42, 0.85)`) for repeating cards.
 
 ---
 
-## 4. Accessibility & Reduced Motion
+## 4. Performance & 60-120 FPS Frame Budget
+- Stick strictly to GPU-accelerated compositor properties: `transform` and `opacity`.
+- Never animate `width`, `height`, `top`, `left`, `margin`, or `padding` in loops, as they trigger expensive layout reflows and frame drops.
+- Always pause continuous canvas animation loops (such as Three.js, WebGL, or Canvas2D) when off-screen using `IntersectionObserver`:
+  ```javascript
+  const observer = new IntersectionObserver(([entry]) => {
+    isCanvasVisible = entry.isIntersecting;
+    if (isCanvasVisible) requestAnimationFrame(renderLoop);
+  });
+  observer.observe(canvasElement);
+  ```
+- In Three.js / WebGL, never allocate new geometries or re-upload dynamic vertex buffers (`geometry.attributes.position.needsUpdate = true`) during active scroll events.
+
+---
+
+## 5. Accessibility & Reduced Motion
 Always provide an accessible fallback for users with vestibular or motion sensitivity:
 ```css
 @media (prefers-reduced-motion: reduce) {

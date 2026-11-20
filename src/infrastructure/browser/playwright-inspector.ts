@@ -161,7 +161,16 @@ export class PlaywrightInspector implements BrowserInspectorPort {
         const caseDirectory = path.join(evidenceDirectory, runId, slug(route), viewport.name);
         await mkdir(caseDirectory, { recursive: true });
         const screenshotPath = path.join(caseDirectory, 'full-page.png');
-        let metrics = { documentWidth: viewport.width, viewportWidth: viewport.width, horizontalOverflow: 0, overflowElements: [] as Array<{ selector: string; scrollWidth: number; clientWidth: number }>, outOfBoundsElements: [] as Array<{ selector: string; left: number; right: number; width: number }>, brokenImages: [] as string[] };
+        let metrics = {
+          documentWidth: viewport.width,
+          viewportWidth: viewport.width,
+          horizontalOverflow: 0,
+          overflowElements: [] as Array<{ selector: string; scrollWidth: number; clientWidth: number }>,
+          outOfBoundsElements: [] as Array<{ selector: string; left: number; right: number; width: number }>,
+          brokenImages: [] as string[],
+          bodyOverflowXHidden: false,
+          backdropFilterCount: 0
+        };
         const issues: string[] = [];
         try {
           const response = await page.goto(targetUrl.href, { waitUntil: 'domcontentloaded', timeout: input.timeoutMs });
@@ -197,16 +206,32 @@ export class PlaywrightInspector implements BrowserInspectorPort {
                 brokenImages.push(src);
               }
             }
+
+            const bodyStyle = document.body ? getComputedStyle(document.body) : null;
+            const docStyle = getComputedStyle(doc);
+            const bodyOverflowXHidden = (bodyStyle?.overflowX === 'hidden') || (docStyle.overflowX === 'hidden');
+
+            let backdropFilterCount = 0;
+            for (const el of Array.from(document.querySelectorAll<HTMLElement>('*'))) {
+              const s = getComputedStyle(el);
+              const bf = s.backdropFilter || (s as Record<string, any>).webkitBackdropFilter;
+              if (bf && bf !== 'none') backdropFilterCount++;
+            }
+
             return {
               documentWidth,
               viewportWidth,
               horizontalOverflow: Math.max(0, documentWidth - viewportWidth),
               overflowElements: overflowElements.slice(0, 30),
               outOfBoundsElements: outOfBoundsElements.slice(0, 30),
-              brokenImages: brokenImages.slice(0, 10)
+              brokenImages: brokenImages.slice(0, 10),
+              bodyOverflowXHidden,
+              backdropFilterCount
             };
           }, input.allowedOverflowSelectors);
           if (metrics.horizontalOverflow > 1) issues.push(`Document has ${metrics.horizontalOverflow}px horizontal overflow.`);
+          if (metrics.bodyOverflowXHidden) issues.push('Smoothness defect: <body> or <html> has overflow-x: hidden which breaks compositor fast-path scrolling; use overflow-x: clip instead.');
+          if (metrics.backdropFilterCount > 8) issues.push(`Performance defect: ${metrics.backdropFilterCount} elements with backdrop-filter detected; excessive blur on scrolling elements exhausts GPU fillrate.`);
           if (metrics.outOfBoundsElements.length > 0) issues.push(`${metrics.outOfBoundsElements.length} visible element(s) extend beyond the viewport bounds.`);
           if (metrics.brokenImages.length > 0) issues.push(`${metrics.brokenImages.length} image(s) failed to load / broken: ${metrics.brokenImages.slice(0, 3).join(', ')}`);
           if (consoleErrors.length) issues.push(`${consoleErrors.length} browser console error(s).`);
