@@ -147,8 +147,8 @@ export class TaskPlanner {
         recommendedPaths: ['evidence/visual', 'src/theme']
       });
       const threeDReview = hasThreeJs ? add({
-        title: 'Inspect 3D scene, shader and lifecycle stability',
-        description: 'Inspect scene composition, shader compilation, resource disposal, deterministic scroll behavior, GPU evidence and device fallback.',
+        title: 'Inspect 3D scene, sculptural detail, shader and lifecycle stability',
+        description: 'Inspect multi-part 3D silhouette accuracy per category (no flat 2D cutouts or mismatched placeholders), smooth curvature/bevels, Line2/TubeGeometry seam detail, RoomEnvironment IBL + MeshPhysicalMaterial PBR shading, tonal separation in enabled themes, shader compilation, resource disposal, deterministic scroll behavior, GPU evidence and device fallback.',
         ownerRole: 'threejs-qa-agent', skillIds: ['threejs-shaders', 'performance-qa'], moduleIds: [15, 18, 19, 30, 34, 44, 63],
         domains: ['threejs'], dependsOn: [visual], parallelGroup: null, requiredEvidence: true,
         recommendedPaths: ['evidence/threejs', 'src/shaders']
