@@ -17,6 +17,7 @@ import type {
 } from '../../domain/ports.js';
 import { assertLocalhostUrl } from '../security/workspace-guard.js';
 import { evaluateDomVisualA11y, extractAxeFindings } from './visual-a11y-evaluator.js';
+import { auditWebGLCanvases, installWebGLTracker, WEBGL_SHADER_WARNING_PATTERN } from './webgl-audit.js';
 
 const DEFAULT_VISUAL_A11Y_VIEWPORTS: ViewportProfile[] = [
   { name: 'laptop-1280', width: 1280, height: 800, isMobile: false, hasTouch: false, deviceScaleFactor: 1 },
@@ -159,12 +160,20 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           serviceWorkers: 'block',
           bypassCSP: true
         });
+        await installWebGLTracker(context);
         const page = await context.newPage();
         const consoleErrors: string[] = [];
+        const shaderWarnings: string[] = [];
         const pageErrors: string[] = [];
         const failedRequests: string[] = [];
         const httpErrors: Array<{ status: number; url: string }> = [];
-        page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+        page.on('console', message => {
+          const text = message.text();
+          if (message.type() === 'error') consoleErrors.push(text);
+          if ((message.type() === 'error' || message.type() === 'warning') && WEBGL_SHADER_WARNING_PATTERN.test(text)) {
+            shaderWarnings.push(text);
+          }
+        });
         page.on('pageerror', error => pageErrors.push(error.message));
         page.on('requestfailed', request => failedRequests.push(`${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? 'unknown'}`));
         page.on('response', response => { if (response.status() >= 400) httpErrors.push({ status: response.status(), url: response.url() }); });
@@ -259,18 +268,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           const localFailedRequests = failedRequests.filter(value => { try { return new URL(value.match(/https?:\/\/\S+/)?.[0] ?? '').origin === base.origin; } catch { return false; } });
           if (localFailedRequests.length) issues.push(`${localFailedRequests.length} same-origin request(s) failed.`);
 
-          const webglAudit = await page.evaluate(() => {
-            const canvases = Array.from(document.querySelectorAll('canvas'));
-            let contextLost = false;
-            for (const c of canvases) {
-              try {
-                const gl = (c.getContext('webgl2') || c.getContext('webgl')) as WebGLRenderingContext | null;
-                if (gl && gl.isContextLost && gl.isContextLost()) contextLost = true;
-              } catch { /* Ignore canvas evaluation error */ }
-            }
-            return { contextLost };
-          }).catch(() => ({ contextLost: false }));
-          if (webglAudit.contextLost) issues.push('WebGL context lost detected on one or more canvas elements.');
+          const webglAudit = await auditWebGLCanvases(page, shaderWarnings);
+          for (const webglIssue of webglAudit.issues) issues.push(webglIssue);
           await page.screenshot({ path: screenshotPath, fullPage: true, animations: 'disabled' });
         } catch (error) {
           issues.push(error instanceof Error ? error.message : String(error));
@@ -436,10 +435,18 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           } catch { await routeRequest.abort('blockedbyclient'); }
         });
 
+        await installWebGLTracker(context);
         const page = await context.newPage();
         const consoleErrors: string[] = [];
+        const shaderWarnings: string[] = [];
         const pageErrors: string[] = [];
-        page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+        page.on('console', message => {
+          const text = message.text();
+          if (message.type() === 'error') consoleErrors.push(text);
+          if ((message.type() === 'error' || message.type() === 'warning') && WEBGL_SHADER_WARNING_PATTERN.test(text)) {
+            shaderWarnings.push(text);
+          }
+        });
         page.on('pageerror', error => pageErrors.push(error.message));
 
         const caseDirectory = path.join(evidenceDirectory, runId, slug(route), colorScheme, viewport.name);
@@ -508,6 +515,9 @@ export class PlaywrightInspector implements BrowserInspectorPort {
               return hidden;
             });
           }
+
+          const webglAudit = await auditWebGLCanvases(page, shaderWarnings);
+          for (const webglIssue of webglAudit.issues) issues.push(`[${colorScheme}] ${webglIssue}`);
 
           if (axeViolations.length > 0) issues.push(`[${colorScheme}] ${axeViolations.length} axe-core WCAG violation rule(s).`);
           if (domMetrics.contrastIssues.length > 0) issues.push(`[${colorScheme}] ${domMetrics.contrastIssues.length} rendered low-contrast/invisible text pair(s).`);

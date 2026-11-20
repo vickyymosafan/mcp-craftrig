@@ -128,23 +128,88 @@ Eliminate flat plastic shading by synthesizing lightweight tileable procedural m
 
 ---
 
-## 5. Fluid Inertia Damping & Gesture Protection
-- **Smooth Damping:** Never bind rotation directly to raw mouse deltas. Use linear interpolation (lerp) or damped `OrbitControls`:
+## 5. Single-Renderer Multi-View (`setScissor` + `setViewport`) for 3D Grids
+Browser engines cap active WebGL contexts (typically 8–16 per page). **Never instantiate a separate `WebGLRenderer` per card** in a multi-card gallery or product grid (this causes `WebGL context lost` and GPU stalls):
+- Mount **one** shared full-viewport `WebGLRenderer` (`alpha: true`) and map each DOM container (`[data-3d-viewport]`) to its own `Scene`, `PerspectiveCamera`, and `OrbitControls(camera, domElement)`:
   ```javascript
-  currentRotY += (targetRotY - currentRotY) * 0.08;
-  currentRotX += (targetRotX - currentRotX) * 0.08;
+  renderer.setScissorTest(false);
+  renderer.clear(true, true);
+  renderer.setScissorTest(true);
+
+  const canvasHeight = renderer.domElement.clientHeight;
+  for (const view of views) {
+    const rect = view.elem.getBoundingClientRect();
+    const offscreen = rect.bottom < 0 || rect.top > canvasHeight || rect.right < 0 || rect.left > renderer.domElement.clientWidth;
+    if (offscreen || rect.width <= 0 || rect.height <= 0) continue;
+
+    const yBottom = canvasHeight - rect.bottom;
+    renderer.setViewport(rect.left, yBottom, rect.width, rect.height);
+    renderer.setScissor(rect.left, yBottom, rect.width, rect.height);
+    view.camera.aspect = rect.width / rect.height;
+    view.camera.updateProjectionMatrix();
+    view.controls.update();
+    renderer.render(view.scene, view.camera);
+  }
   ```
-- **Mobile Gesture Protection:** Always set `touch-action: pan-y;` on the canvas element so dragging the 3D model horizontally does NOT block vertical page scrolling.
+
+---
+
+## 6. Studio Post-Processing (`EffectComposer` + `GTAOPass` + `OutputPass`)
+For hero showcases and detail views, add subtle contact ambient occlusion and tone-mapped output instead of raw un-occluded forward rendering:
+```javascript
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const gtaoPass = new GTAOPass(scene, camera, width, height);
+gtaoPass.output = GTAOPass.OUTPUT.Denoise; // Crisp contact AO in garment folds & shoe crevices
+composer.addPass(gtaoPass);
+
+// Optional subtle specular highlight bloom (keep threshold >= 0.85, strength <= 0.25)
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.2, 0.35, 0.88);
+composer.addPass(bloomPass);
+
+composer.addPass(new OutputPass()); // Applies ACESFilmicToneMapping + sRGB conversion
+```
+Always call `composer.setSize(width, height)` on resize and `gtaoPass.dispose(); composer.dispose();` on unmount.
+
+---
+
+## 7. Custom Micro-Shaders (`onBeforeCompile` & WebGPU TSL)
+Use targeted shader hooks for fabric Fresnel sheen, subtle GPU vertex drape, or micro-weave normals without duplicating vertex buffers on CPU:
+- **WebGL (`Material.onBeforeCompile`):** Inject custom uniforms and GLSL at `#include <common>` / `#include <color_fragment>` / `#include <begin_vertex>`. If modifying shadow-casting vertex positions, also assign `mesh.customDepthMaterial` so shadows match the deformed mesh.
+- **WebGPU-Ready (`three/webgpu` + `three/tsl`):** When targeting `WebGPURenderer`, build custom materials with `MeshPhysicalNodeMaterial` and `TSL` nodes instead of `onBeforeCompile` or `ShaderMaterial`.
+
+---
+
+## 8. Compressed Assets (`MeshoptDecoder` + `KTX2Loader`) & `BatchedMesh`
+- When loading external `.glb` assets, configure `GLTFLoader` with `MeshoptDecoder` (`EXT_meshopt_compression`) and `KTX2Loader.detectSupport(renderer)` (`KHR_texture_basisu`).
+- When rendering many repeated details (eyelets, buttons, rivets, particles, or instanced catalog props), consolidate draw calls using `THREE.InstancedMesh` or `THREE.BatchedMesh` (`<= 50` draw calls per viewport).
+
+---
+
+## 9. Interactive Studio UX, Damping & Gesture Protection
+- **Damped Orbit & Camera Presets:** Use `OrbitControls` with `controls.enableDamping = true; controls.dampingFactor = 0.06;` (always calling `controls.update()` in the loop and `controls.dispose()` on cleanup). Provide smooth lerped camera presets (*Editorial Front*, *3/4 Profile*, *Detail/Seam*, *Back/Sole*) and optional *Inspect Layers* / material swatch switching.
+- **Cursor-Tracking Rim:** Gently modulate rim light position or subtle model yaw lerp (`+= (target - current) * 0.08`) on pointer hover while respecting `prefers-reduced-motion`.
+- **Mobile Gesture Protection:** Always set `touch-action: pan-y;` on the canvas element so horizontal 3D inspection does NOT block vertical page scrolling.
 - **Non-blocking UI Overlays & HUD Contrast:** UI HUD overlays over the 3D canvas must have `pointer-events: none;`, with interactive buttons explicitly set to `pointer-events: auto;`. Every badge, label, or button sitting over a WebGL `<canvas>` must carry an explicit surface-scoped scrim/backdrop (`bg` + `fg` + `border`) with $\ge 4.5:1$ contrast in all enabled color schemes (`light` and/or `dark`), verified via `localhost.audit_visual_a11y`.
 
 ---
 
-## 6. Resource Lifecycle & GPU Governance
+## 10. Resource Lifecycle & GPU Governance
 Never leak WebGL resources or waste mobile battery:
 1. **Auto-Throttle on Tab Background:** Halt animation when `document.hidden` is true.
 2. **Scroll-Driven Pause:** Use `IntersectionObserver` to halt `requestAnimationFrame` when the canvas scrolls out of viewport.
-3. **Exhaustive Memory Cleanup:** On route unmount or `beforeunload`, dispose every geometry, material, texture (`map`, `bumpMap`, `normalMap`, `roughnessMap`, `sheenColorMap`), `envRT` render target, and `renderer`:
+3. **Exhaustive Memory Cleanup:** On route unmount or `beforeunload`, dispose every geometry, material, texture (`map`, `bumpMap`, `normalMap`, `roughnessMap`, `sheenColorMap`), `envRT` render target, `composer` / passes (`gtaoPass`), `controls`, and `renderer`:
    ```javascript
+   controls?.dispose();
+   gtaoPass?.dispose();
+   composer?.dispose();
    envRT?.dispose();
    renderer.dispose();
    scene.traverse(object => {
@@ -165,5 +230,6 @@ Never leak WebGL resources or waste mobile battery:
 
 ## Verification Evidence
 - **Visual Silhouette & Category Fidelity Check:** Inspect captured Playwright screenshots (`light` & `dark` via `localhost.inspect_responsive` / `localhost.audit_visual_a11y`) to verify every 3D card/scene matches its real domain object (e.g. sneakers show multi-part sole/vamp/laces, garments show sculpted volume/collar/seams/folds—never flat 2D cutouts), shows crisp line/bevel detail, and separates cleanly from the card background.
-- **Frame & GPU Budget:** Verify steady 60 FPS behavior, bounded draw calls ($\le 50$ per viewport scene, merging static sub-parts via `mergeGeometries` from `three/addons/utils/BufferGeometryUtils.js` when needed), and zero WebGL context loss or memory leaks.
+- **WebGL Context & Non-Blank Canvas Gate:** Confirm $\le 4$ active WebGL contexts per page (use `setScissor` for multi-card grids), zero blank/unrendered canvases, zero `THREE.WebGLProgram` / GLSL shader warnings, and zero WebGL context loss.
+- **Frame & GPU Budget:** Verify steady 60 FPS behavior, bounded draw calls ($\le 50$ per viewport scene, merging static sub-parts via `mergeGeometries` from `three/addons/utils/BufferGeometryUtils.js` when needed), and clean disposal.
 - **Zero Overflow & HUD Contrast:** Confirm `0px` horizontal overflow and $\ge 4.5:1$ HUD/badge contrast across all enabled color schemes.
