@@ -32,7 +32,37 @@ const viewportSchema = z.object({ name: z.string().min(1), width: z.number().int
 const actionSchema = z.object({ action: z.enum(['click', 'fill', 'check', 'uncheck', 'select', 'press', 'expect-visible', 'expect-text']), selector: z.string().min(1), value: z.string().optional(), timeoutMs: z.number().int().min(500).max(120000).optional() });
 
 function result(value: unknown) { return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] }; }
-function errorResult(error: unknown) { return { isError: true, content: [{ type: 'text' as const, text: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }] }; }
+function errorResult(error: unknown, recoveryHint?: string) {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  let hint = recoveryHint;
+
+  if (!hint && error instanceof Error) {
+    if (error.name === 'ConflictError') {
+      if (error.message.includes('dependencies are not complete')) {
+        hint = 'Use harness.get_ready_tasks to find tasks whose dependencies are already satisfied.';
+      } else if (error.message.includes('File ownership conflict')) {
+        hint = 'Use harness.list_file_locks to inspect active locks, wait for the conflicting task, or claim disjoint subpaths.';
+      } else if (error.message.includes('Repair budget exhausted')) {
+        hint = 'Escalate to human review; do not continue automatic repair loops without authorization.';
+      }
+    } else if (error.name === 'NotFoundError') {
+      hint = 'Verify the UUID using harness.get_execution_plan or check the active plan ID.';
+    } else if (error.name === 'ValidationError') {
+      if (error.message.includes('requires at least one evidence')) {
+        hint = 'Record evidence first using harness.record_evidence before completing this task.';
+      } else if (error.message.includes('A PASS checkpoint requires evidence')) {
+        hint = 'Attach valid plan-scoped evidence IDs when marking a quality checkpoint as PASS.';
+      }
+    }
+  }
+
+  const content: Array<{ type: 'text'; text: string }> = [{ type: 'text', text: message }];
+  if (hint) {
+    content.push({ type: 'text', text: `[Actionable Recovery Guidance]: ${hint}` });
+  }
+
+  return { isError: true, content };
+}
 
 export function createMcpServer(deps: Dependencies): McpServer {
   const server = new McpServer({ name: 'principal-agentic-engineering-harness', version: '0.1.0' });
@@ -94,6 +124,16 @@ export function createMcpServer(deps: Dependencies): McpServer {
     const filter = toListFileLocksFilter(input);
     if (filter.path !== undefined) deps.guard.resolveInsideWorkspace(filter.path);
     return result(await deps.taskService.listFileLocks(filter));
+  } catch (error) { return errorResult(error); } });
+
+  server.registerTool('harness.recover_stale_locks', {
+    description: 'Recover stale or orphaned file locks held by completed/failed tasks or abandoned agent leases.',
+    inputSchema: z.object({ planId: z.string().uuid().optional(), maxAgeMinutes: z.number().int().min(1).max(1440).optional() })
+  }, async ({ planId, maxAgeMinutes }) => { try {
+    const maxAgeMs = (maxAgeMinutes ?? 30) * 60 * 1000;
+    const recovered = await deps.taskService.recoverStaleLocks(planId, maxAgeMs);
+    const checklistPath = planId ? await deps.checklistWriter.write(planId) : null;
+    return result({ ...recovered, checklistPath });
   } catch (error) { return errorResult(error); } });
 
   server.registerTool('harness.complete_task', {

@@ -23,11 +23,12 @@ function acquireTaskLocks(
   const fileLocks = ensureFileLocks(state);
   const activeLocks = Object.values(fileLocks);
 
-  for (const candidate of normalized) {
+  const sortedCandidates = [...normalized].sort();
+  for (const candidate of sortedCandidates) {
     const conflict = findLockConflict(candidate, activeLocks, task.id);
     if (conflict) {
       throw new ConflictError(
-        `File ownership conflict: "${candidate}" overlaps with active lock "${conflict.path}" held by agent "${conflict.agentId}" on task "${conflict.taskId}".`
+        `File ownership conflict: "${candidate}" overlaps with active lock "${conflict.path}" held by agent "${conflict.agentId}" on task "${conflict.taskId}". Hint: wait for task "${conflict.taskId}" to complete or claim disjoint subpaths.`
       );
     }
   }
@@ -184,6 +185,38 @@ export class TaskService {
       .sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  async recoverStaleLocks(planId?: string, maxAgeMs = 30 * 60 * 1000): Promise<{ recovered: FileLockRecord[]; message: string }> {
+    return this.repository.transact(state => {
+      const fileLocks = ensureFileLocks(state);
+      const currentTime = Date.now();
+      const recovered: FileLockRecord[] = [];
+
+      for (const [lockPath, lock] of Object.entries(fileLocks)) {
+        if (planId && lock.planId !== planId) continue;
+        const task = state.tasks[lock.taskId];
+        const isOrphaned = !task || task.status !== 'in_progress';
+        const lockAge = currentTime - Date.parse(lock.acquiredAt);
+        const isExpired = Number.isFinite(lockAge) && lockAge > maxAgeMs;
+
+        if (isOrphaned || isExpired) {
+          delete fileLocks[lockPath];
+          recovered.push(lock);
+          if (task && task.ownedPaths.includes(lockPath)) {
+            task.ownedPaths = task.ownedPaths.filter(p => p !== lockPath);
+            task.updatedAt = now();
+          }
+        }
+      }
+
+      return {
+        recovered,
+        message: recovered.length > 0
+          ? `Successfully recovered ${recovered.length} stale or orphaned file lock(s).`
+          : 'No stale or orphaned file locks detected.'
+      };
+    });
+  }
+
   async completeTask(taskId: string, status: Extract<TaskStatus, 'completed' | 'blocked' | 'failed'>, evidenceIds: string[] = [], reason: string | null = null): Promise<TaskNode> {
     return this.repository.transact(state => {
       const task = state.tasks[taskId];
@@ -262,8 +295,17 @@ export class TaskService {
     ];
     const invalidNA = checkpoints.filter(item => item.required && item.status === 'not_applicable' && !item.reason?.trim()).map(item => item.title);
     const passWithoutEvidence = checkpoints.filter(item => item.required && item.status === 'pass' && (item.evidenceIds.length === 0 || item.evidenceIds.some(id => !evidenceIds.has(id)))).map(item => item.title);
-    const incomplete = missing.length + failed.length + invalidNA.length + passWithoutEvidence.length > 0;
-    return { status: incomplete ? 'blocked' : 'pass', missing, failed: [...failed, ...invalidNA, ...passWithoutEvidence], checkpoints };
+    const staleEvidence = checkpoints.filter(item => {
+      if (!item.required || item.status !== 'pass') return false;
+      return item.evidenceIds.some(id => {
+        const ev = evidence.find(e => e.id === id);
+        if (!ev || !ev.taskId) return false;
+        const linkedTask = tasks.find(t => t.id === ev.taskId);
+        return linkedTask && linkedTask.status !== 'completed';
+      });
+    }).map(item => `${item.title} (stale evidence linked to non-completed task)`);
+    const incomplete = missing.length + failed.length + invalidNA.length + passWithoutEvidence.length + staleEvidence.length > 0;
+    return { status: incomplete ? 'blocked' : 'pass', missing, failed: [...failed, ...invalidNA, ...passWithoutEvidence, ...staleEvidence], checkpoints };
   }
 
   async incrementRepairIteration(planId: string): Promise<{ repairIterations: number; maxRepairIterations: number }> {

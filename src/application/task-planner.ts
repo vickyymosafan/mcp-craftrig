@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ExecutionPlan, TaskNode, WorkDomain } from '../domain/models.js';
 import { QUALITY_DIMENSIONS } from '../domain/models.js';
+import { assertAcyclicDependencyGraph } from '../domain/dag-validator.js';
 
 const now = () => new Date().toISOString();
 
@@ -140,6 +141,7 @@ export class TaskPlanner {
       maxRepairIterations: Math.max(1, Math.min(input.maxRepairIterations ?? this.defaultMaxRepairIterations, 12)), repairIterations: 0,
       createdAt: timestamp, updatedAt: timestamp
     };
+    assertAcyclicDependencyGraph(tasks);
     return { plan, tasks };
   }
 }
