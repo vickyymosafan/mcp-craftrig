@@ -101,7 +101,7 @@ Bring scenes to life with moving procedural particle systems:
   currentRotX += (targetRotX - currentRotX) * 0.08;
   ```
 - **Mobile Gesture Protection:** Always set `touch-action: pan-y;` on the canvas element so dragging the 3D model horizontally does NOT block vertical page scrolling.
-- **Non-blocking UI Overlays:** UI HUD overlays over the 3D canvas must have `pointer-events: none;`, with interactive buttons explicitly set to `pointer-events: auto;`.
+- **Non-blocking UI Overlays & HUD Contrast:** UI HUD overlays over the 3D canvas must have `pointer-events: none;`, with interactive buttons explicitly set to `pointer-events: auto;`. Every badge, label, or button sitting over a WebGL `<canvas>` must carry an explicit surface-scoped scrim/backdrop (`bg` + `fg` + `border`) with $\ge 4.5:1$ contrast in all enabled color schemes (`light` and/or `dark`), verified via `localhost.audit_visual_a11y`.
 
 ---
 

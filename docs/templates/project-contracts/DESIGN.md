@@ -15,6 +15,7 @@
 ## User choices
 Recorded from the design menu (`harness://design-options`). Unanswered items use the menu default.
 - Personality / theme mode: TBD
+- Section polarity / theme toggle / light canvas tone: TBD
 - Color family / harmony / accent usage: TBD
 - Heading / body / mono fonts: TBD
 - Type scale / weight: TBD

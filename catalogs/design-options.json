@@ -17,6 +17,27 @@
       "options": ["light-only", "dark-only", "light-and-dark", "system-auto", "high-contrast"]
     },
     {
+      "id": "sectionPolarity",
+      "label": "Section polarity & contrast bands",
+      "multi": false,
+      "default": "follow-active-theme",
+      "options": ["follow-active-theme", "contrast-bands", "always-dark-media-showcase", "always-light-reading", "custom"]
+    },
+    {
+      "id": "themeToggle",
+      "label": "Theme switcher control",
+      "multi": false,
+      "default": "three-way-system",
+      "options": ["three-way-system", "two-way-toggle", "system-only", "none"]
+    },
+    {
+      "id": "lightCanvasTone",
+      "label": "Light mode canvas tone",
+      "multi": false,
+      "default": "crisp-white",
+      "options": ["crisp-white", "warm-paper", "soft-tinted-neutral", "not-applicable-dark-only"]
+    },
+    {
       "id": "colorFamily",
       "label": "Color family",
       "multi": false,

@@ -1,8 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { BrowserInspectorPort, InteractionScenarioInput, InteractionScenarioReport, ResponsiveInspectionInput, ResponsiveInspectionReport, ResponsiveViewportResult } from '../../domain/ports.js';
+import type {
+  BrowserInspectorPort,
+  ColorSchemeMode,
+  InteractionScenarioInput,
+  InteractionScenarioReport,
+  ResponsiveInspectionInput,
+  ResponsiveInspectionReport,
+  ResponsiveViewportResult,
+  ThemeToggleVerification,
+  ViewportProfile,
+  VisualA11yAuditInput,
+  VisualA11yAuditReport,
+  VisualA11yCaseResult
+} from '../../domain/ports.js';
 import { assertLocalhostUrl } from '../security/workspace-guard.js';
+import { evaluateDomVisualA11y, extractAxeFindings } from './visual-a11y-evaluator.js';
+
+const DEFAULT_VISUAL_A11Y_VIEWPORTS: ViewportProfile[] = [
+  { name: 'laptop-1280', width: 1280, height: 800, isMobile: false, hasTouch: false, deviceScaleFactor: 1 },
+  { name: 'mobile-390', width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
+];
 
 const DEFAULT_VIEWPORTS = [
   { name: 'small-mobile-320', width: 320, height: 740, isMobile: true, hasTouch: true, deviceScaleFactor: 2 },
@@ -365,6 +384,254 @@ export class PlaywrightInspector implements BrowserInspectorPort {
     const report: InteractionScenarioReport = { runId, route, passed, startedAt, finishedAt, steps, consoleErrors, pageErrors, failedRequests, httpErrors, screenshotPath, reportPath: path.join(directory, 'interaction-report.json') };
     await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
     return report;
+  }
+
+  async auditVisualA11y(input: VisualA11yAuditInput): Promise<VisualA11yAuditReport> {
+    const base = assertLocalhostUrl(input.baseUrl);
+    const runId = randomUUID();
+    const startedAt = new Date().toISOString();
+    const routes = input.routes.length ? input.routes : ['/'];
+    const colorSchemes: ColorSchemeMode[] = input.colorSchemes.length ? [...new Set(input.colorSchemes)] : ['light', 'dark'];
+    const profiles = input.viewports.length ? input.viewports : DEFAULT_VISUAL_A11Y_VIEWPORTS;
+    const evidenceDirectory = path.resolve(input.evidenceDirectory);
+    await mkdir(evidenceDirectory, { recursive: true });
+
+    const { chromium } = await import('playwright');
+    const { AxeBuilder } = await import('@axe-core/playwright');
+    const browser = await launchSmartBrowser(chromium);
+
+    const tasks: Array<{ route: string; targetUrl: URL; colorScheme: ColorSchemeMode; viewport: ViewportProfile }> = [];
+    for (const routeValue of routes) {
+      const route = safeRoute(routeValue);
+      const targetUrl = new URL(route, base);
+      if (targetUrl.origin !== base.origin) throw new Error('Route escaped the configured localhost origin.');
+      for (const colorScheme of colorSchemes) {
+        for (const viewport of profiles) {
+          tasks.push({ route, targetUrl, colorScheme, viewport });
+        }
+      }
+    }
+
+    let themeToggleCheck: ThemeToggleVerification | null = null;
+
+    try {
+      const results: VisualA11yCaseResult[] = await mapConcurrent(tasks, 2, async ({ route, targetUrl, colorScheme, viewport }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          screen: { width: viewport.width, height: viewport.height },
+          isMobile: viewport.isMobile,
+          hasTouch: viewport.hasTouch,
+          deviceScaleFactor: viewport.deviceScaleFactor,
+          colorScheme,
+          serviceWorkers: 'block',
+          bypassCSP: true
+        });
+        await context.route('**/*', async routeRequest => {
+          if (!routeRequest.request().isNavigationRequest()) { await routeRequest.continue(); return; }
+          try {
+            const navigationUrl = new URL(routeRequest.request().url());
+            const isLoopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(navigationUrl.hostname);
+            if (!isLoopback || navigationUrl.origin !== base.origin) { await routeRequest.abort('blockedbyclient'); return; }
+            await routeRequest.continue();
+          } catch { await routeRequest.abort('blockedbyclient'); }
+        });
+
+        const page = await context.newPage();
+        const consoleErrors: string[] = [];
+        const pageErrors: string[] = [];
+        page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+        page.on('pageerror', error => pageErrors.push(error.message));
+
+        const caseDirectory = path.join(evidenceDirectory, runId, slug(route), colorScheme, viewport.name);
+        await mkdir(caseDirectory, { recursive: true });
+        const screenshotPath = path.join(caseDirectory, `${colorScheme}.png`);
+        const ariaSnapshotPath = path.join(caseDirectory, 'aria-snapshot.yml');
+
+        const issues: string[] = [];
+        let axeViolations: VisualA11yCaseResult['axeViolations'] = [];
+        let contrastIssues: VisualA11yCaseResult['contrastIssues'] = [];
+        let incompleteContrast: VisualA11yCaseResult['incompleteContrast'] = [];
+        let typographyIssues: VisualA11yCaseResult['typographyIssues'] = [];
+        let targetSizeIssues: VisualA11yCaseResult['targetSizeIssues'] = [];
+        let occlusionIssues: VisualA11yCaseResult['occlusionIssues'] = [];
+        let polarityIssues: VisualA11yCaseResult['polarityIssues'] = [];
+        let reducedMotionHiddenCount = 0;
+        let fontErrors: string[] = [];
+        let clsScore: number | null = null;
+
+        try {
+          const response = await page.goto(targetUrl.href, { waitUntil: 'domcontentloaded', timeout: input.timeoutMs });
+          await page.waitForLoadState('networkidle', { timeout: Math.min(input.timeoutMs, 3000) }).catch(() => undefined);
+          await page.evaluate(async () => { if ('fonts' in document) await Promise.race([document.fonts.ready, new Promise(resolve => setTimeout(resolve, 1500))]); });
+
+          const finalUrl = new URL(page.url());
+          if (finalUrl.origin !== base.origin) throw new Error(`Navigation escaped localhost origin: ${finalUrl.origin}`);
+          if (response && response.status() >= 400) issues.push(`Route returned HTTP ${response.status()}.`);
+
+          const axeResults = await new AxeBuilder({ page: page as any })
+            .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
+            .analyze();
+          const extracted = extractAxeFindings(axeResults as any);
+          axeViolations = extracted.axeViolations;
+
+          const domMetrics = await page.evaluate(evaluateDomVisualA11y, {
+            colorScheme,
+            expectedSectionPolarity: input.expectedSectionPolarity
+          });
+
+          contrastIssues = [...extracted.axeContrastIssues, ...domMetrics.contrastIssues];
+          incompleteContrast = extracted.incompleteContrast;
+          typographyIssues = domMetrics.typographyIssues;
+          targetSizeIssues = domMetrics.targetSizeIssues;
+          occlusionIssues = domMetrics.occlusionIssues;
+          polarityIssues = domMetrics.polarityIssues;
+          fontErrors = domMetrics.fontErrors;
+          clsScore = domMetrics.clsScore;
+
+          const ariaYaml = await page.locator('body').ariaSnapshot({ mode: 'ai', boxes: true }).catch(() => '');
+          await writeFile(ariaSnapshotPath, ariaYaml || '# ariaSnapshot unavailable', 'utf8');
+
+          await page.screenshot({ path: screenshotPath, fullPage: true, animations: 'disabled' });
+
+          if (input.testReducedMotion) {
+            await page.emulateMedia({ reducedMotion: 'reduce' });
+            await page.waitForTimeout(100);
+            reducedMotionHiddenCount = await page.evaluate(() => {
+              let hidden = 0;
+              for (const el of Array.from(document.querySelectorAll<HTMLElement>('h1, h2, main > section, [data-reveal]'))) {
+                const s = getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                if (s.display !== 'none' && rect.height > 10 && (Number(s.opacity) === 0 || s.visibility === 'hidden')) {
+                  hidden++;
+                }
+              }
+              return hidden;
+            });
+          }
+
+          if (axeViolations.length > 0) issues.push(`[${colorScheme}] ${axeViolations.length} axe-core WCAG violation rule(s).`);
+          if (domMetrics.contrastIssues.length > 0) issues.push(`[${colorScheme}] ${domMetrics.contrastIssues.length} rendered low-contrast/invisible text pair(s).`);
+          if (occlusionIssues.length > 0) issues.push(`[${colorScheme}] ${occlusionIssues.length} interactive control(s) occluded by another layer.`);
+          if (targetSizeIssues.length > 0) issues.push(`[${colorScheme}] ${targetSizeIssues.length} interactive target(s) smaller than 24x24 CSS px.`);
+          if (polarityIssues.length > 0) issues.push(`[${colorScheme}] ${polarityIssues.length} section(s) violated expected follow-active-theme polarity.`);
+          if (typographyIssues.some(item => item.kind === 'clipped-text' || item.kind === 'tiny-text')) {
+            issues.push(`[${colorScheme}] Typography clipping or sub-11px text detected.`);
+          }
+          if (fontErrors.length > 0) issues.push(`[${colorScheme}] Webfont load errors: ${fontErrors.join(', ')}`);
+          if (reducedMotionHiddenCount > 0) issues.push(`[${colorScheme}] ${reducedMotionHiddenCount} primary section/heading(s) remained hidden under prefers-reduced-motion: reduce.`);
+          if (consoleErrors.length > 0) issues.push(`[${colorScheme}] ${consoleErrors.length} console error(s).`);
+          if (pageErrors.length > 0) issues.push(`[${colorScheme}] ${pageErrors.length} uncaught page error(s).`);
+        } catch (error) {
+          issues.push(error instanceof Error ? error.message : String(error));
+          await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+          await writeFile(ariaSnapshotPath, '# ariaSnapshot skipped due to error', 'utf8').catch(() => undefined);
+        } finally {
+          const finalUrl = page.url();
+          await context.close();
+          // Preserve finalUrl closure value
+          void finalUrl;
+        }
+
+        const passed = issues.length === 0;
+        return {
+          route,
+          colorScheme,
+          viewport,
+          finalUrl: targetUrl.href,
+          axeViolations,
+          contrastIssues,
+          incompleteContrast,
+          typographyIssues,
+          targetSizeIssues,
+          occlusionIssues,
+          polarityIssues,
+          reducedMotionHiddenCount,
+          fontErrors,
+          clsScore,
+          ariaSnapshotPath,
+          screenshotPath,
+          consoleErrors,
+          pageErrors,
+          passed,
+          issues
+        };
+      });
+
+      // Optional interactive theme-toggle verification on the first route
+      if (input.themeToggleSelector) {
+        const toggleContext = await browser.newContext({ colorScheme: colorSchemes[0] ?? 'light', serviceWorkers: 'block', bypassCSP: true });
+        const togglePage = await toggleContext.newPage();
+        try {
+          const firstUrl = new URL(safeRoute(routes[0] ?? '/'), base);
+          await togglePage.goto(firstUrl.href, { waitUntil: 'domcontentloaded', timeout: input.timeoutMs });
+          const readThemeState = () => togglePage.evaluate(() => {
+            const root = document.documentElement;
+            const bodyBg = getComputedStyle(document.body).backgroundColor;
+            return JSON.stringify({
+              dataTheme: root.getAttribute('data-theme'),
+              className: root.className,
+              colorScheme: getComputedStyle(root).colorScheme,
+              bodyBg
+            });
+          });
+          const beforeState = await readThemeState();
+          await togglePage.locator(input.themeToggleSelector).first().click({ timeout: input.timeoutMs });
+          await togglePage.waitForTimeout(150);
+          const afterState = await readThemeState();
+          const changed = beforeState !== afterState;
+          themeToggleCheck = {
+            tested: true,
+            selector: input.themeToggleSelector,
+            changed,
+            beforeState,
+            afterState,
+            detail: changed
+              ? 'Theme toggle updated root theme state or computed background.'
+              : 'Theme toggle click produced no observable DOM or background change.'
+          };
+        } catch (error) {
+          themeToggleCheck = {
+            tested: true,
+            selector: input.themeToggleSelector,
+            changed: false,
+            beforeState: 'unknown',
+            afterState: 'unknown',
+            detail: `Theme toggle test failed: ${error instanceof Error ? error.message : String(error)}`
+          };
+        } finally {
+          await toggleContext.close();
+        }
+      }
+
+      const finishedAt = new Date().toISOString();
+      const passedCases = results.filter(item => item.passed).length;
+      const totalContrastViolations = results.reduce((sum, item) => sum + item.contrastIssues.length, 0);
+      const totalAxeViolations = results.reduce((sum, item) => sum + item.axeViolations.length, 0);
+      const totalIncompleteContrast = results.reduce((sum, item) => sum + item.incompleteContrast.length, 0);
+      const toggleFailed = themeToggleCheck !== null && !themeToggleCheck.changed;
+      const report: VisualA11yAuditReport = {
+        runId,
+        baseUrl: base.href,
+        startedAt,
+        finishedAt,
+        testedColorSchemes: colorSchemes,
+        totalCases: results.length,
+        passedCases,
+        failedCases: results.length - passedCases,
+        totalContrastViolations,
+        totalAxeViolations,
+        totalIncompleteContrast,
+        themeToggleCheck,
+        overallStatus: passedCases === results.length && !toggleFailed ? 'pass' : 'fail',
+        results,
+        reportPath: path.join(evidenceDirectory, runId, 'visual-a11y-report.json')
+      };
+      await mkdir(path.dirname(report.reportPath), { recursive: true });
+      await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
+      return report;
+    } finally {
+      await browser.close();
+    }
   }
 }
 

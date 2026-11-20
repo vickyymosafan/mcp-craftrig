@@ -134,6 +134,7 @@ claude mcp add craftrig -- node d:/craftrig/dist/src/index.js
 | `harness.evaluate_quality_gate` | Quality Gate | Assesses all required acceptance criteria checkpoints before release. |
 | `localhost.start_dev_server` | Runtime | Starts and monitors local development servers. |
 | `localhost.inspect_responsive` | Browser QA | Runs Playwright batch responsive scan across 13 viewport profiles. |
+| `localhost.audit_visual_a11y` | Visual & A11y QA | Runs dual-theme (`light`/`dark`) `@axe-core/playwright`, composited contrast, polarity, typography, occlusion, target-size, reduced-motion, and `ariaSnapshot` audit. |
 | `localhost.run_interaction_scenario`| Browser QA | Executes non-destructive UI interaction sequences. |
 
 ---

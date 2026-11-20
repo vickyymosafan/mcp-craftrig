@@ -58,10 +58,11 @@ Instead of static filler text or fake stock charts, embed live, lightweight canv
 
 ---
 
-## 4. Accessible Dark-Mode Glassmorphism
-When using translucent panels and backdrop blur:
-- Maintain **WCAG AAA contrast ($\ge 12:1$)** for body text and headers against the blended surface.
-- Never place low-contrast gray text on semi-transparent white cards.
+## 4. Accessible Dual-Polarity Surfaces & Glassmorphism
+Whether implementing crisp/warm Light surfaces, deep Obsidian Dark surfaces, or scoped translucent panels:
+- Maintain **WCAG AA ($\ge 4.5:1$ normal, $\ge 3:1$ UI) and target AAA ($\ge 7:1$ body)** in **every** enabled theme mode (`light` and/or `dark`) against the actual alpha-composited background.
+- Never place low-contrast muted text or bare theme-global ink tokens on translucent cards, badges, or inverted contrast bands. Pair every badge/pill/HUD with surface-scoped `bg` + `fg` + `border` tokens (or `light-dark()`).
+- When placing badges, labels, or CTAs over dynamic photography, gradients, or a Three.js `<canvas>`, add a calibrated scrim/backdrop so text contrast stays $\ge 4.5:1$ regardless of underlying scene motion.
 - Always provide high-visibility keyboard focus rings:
   ```css
   :focus-visible {
@@ -69,7 +70,7 @@ When using translucent panels and backdrop blur:
     outline-offset: 3px;
   }
   ```
-- Guarantee minimum touch target dimensions of $44 \times 44\text{px}$ on all interactive buttons and links.
+- Guarantee minimum touch target dimensions of $44 \times 44\text{px}$ on touch viewports and $\ge 24 \times 24\text{px}$ on desktop controls (WCAG 2.2 SC 2.5.8).
 
 ---
 
@@ -82,5 +83,6 @@ When using translucent panels and backdrop blur:
 
 ## Verification Evidence
 1. **0px Horizontal Overflow:** Verify via `localhost.inspect_responsive` across all 13 standard viewport profiles (320px–1920px).
-2. **Zero Console Errors:** Zero unhandled promise rejections or deprecated API warnings in browser inspector logs.
-3. **Evidence Artifacts:** Record full-page screenshots and responsive JSON summaries under `.harness/evidence/`.
+2. **Dual-Theme Visual & A11y Audit:** Run `localhost.audit_visual_a11y` across every enabled color scheme (`light` / `dark`) and verify 0 `axe-core` violations, 0 invisible/low-contrast elements, 0 occluded controls, and valid `reducedMotion` rendering.
+3. **Zero Console Errors:** Zero unhandled promise rejections or deprecated API warnings in browser inspector logs.
+4. **Evidence Artifacts:** Record full-page Light & Dark screenshots, ARIA snapshots, and JSON audit summaries under `.harness/evidence/`.

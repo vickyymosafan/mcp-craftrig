@@ -9,7 +9,7 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 1. Define target devices, network conditions, route scope, and user-critical journeys.
 2. Separate build-time, network, main-thread, rendering, image/font, and GPU bottlenecks.
 3. Capture baseline before optimizing.
-4. Inspect console, failed requests, resource loading, long tasks, layout shifts, and frame behavior.
+4. Inspect console, failed requests, resource loading, long tasks, layout shifts (`CLS`), `LCP`, and frame behavior (using `localhost.audit_visual_a11y` runtime metrics alongside browser profiling).
 5. Audit Fast-Path Compositor Scrolling:
    - Ensure `body` and `html` do NOT have `overflow-x: hidden`. Enforce `overflow-x: clip`.
    - Ensure repeating grid/card elements do NOT stack heavy `backdrop-filter: blur(...)` to prevent GPU fillrate exhaustion.

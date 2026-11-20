@@ -89,7 +89,7 @@ Use snappy, modern spring-like easing curves instead of generic linear or standa
 ---
 
 ## 5. Accessibility & Reduced Motion
-Always provide an accessible fallback for users with vestibular or motion sensitivity:
+Always provide an accessible fallback for users with vestibular or motion sensitivity, and verify it with `localhost.audit_visual_a11y` (`testReducedMotion: true`) so scroll-reveal or intro elements do not remain stuck invisible at `opacity: 0`:
 ```css
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

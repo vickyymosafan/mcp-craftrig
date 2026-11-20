@@ -3,7 +3,7 @@
 ## Implemented in this starter
 
 - Clean Architecture domain, application, infrastructure and MCP interface layers.
-- MCP stdio server exposing 20 tools, 6 read-only resources and 1 workflow prompt.
+- MCP stdio server exposing 21 tools, 6 read-only resources and 1 workflow prompt.
 - 70-module capability catalog, 7 reference categories, and 36 source records with verification provenance.
 - 21 portable Agent Skills using the `SKILL.md` format.
 - Principal Development rulebook and 12 project contract templates for design, components, responsive, UI acceptance, typography, color, motion, 3D, accessibility, content and architecture.
@@ -13,6 +13,7 @@
 - Generated Markdown checklist containing tasks, quality checkpoints and evidence metadata.
 - Local dev-server supervisor restricted to package scripts `dev`, `start` and `preview`.
 - Localhost-only browser navigation, responsive viewport inspection, screenshots, DOM overflow/out-of-bounds metrics, browser errors and interaction scenarios; conditional Three.js rendering/shader/lifecycle checkpoint.
+- Dual-theme (`light` / `dark`) visual & accessibility auditing (`localhost.audit_visual_a11y`) powered by `@axe-core/playwright` (`wcag22aa`), alpha-composited contrast guard, section polarity verification, typography/occlusion/target-size checks, `prefers-reduced-motion` check, and Playwright `ariaSnapshot`.
 - Workspace path guard and explicit browser destructive-action opt-in.
 - Example host configuration for VS Code and Cursor, plus Claude Code setup instructions.
 
@@ -20,8 +21,7 @@
 
 - MCP does not create or run LLM subagents. The host must call its native agent delegation feature.
 - No LLM provider is selected. Planning and subagent reasoning are host-owned.
-- No automatic semantic screenshot vision model is bundled. The host's multimodal agent should inspect saved screenshots and return evidence.
-- No axe-core integration is bundled yet. Accessibility review is guided by Skill instructions and browser evidence.
+- No automatic semantic screenshot vision model is bundled. The host's multimodal agent should inspect saved screenshots and any `incompleteContrast` items returned by `localhost.audit_visual_a11y`.
 - Chromium is the only Playwright browser adapter currently implemented.
 - The browser navigation guard is not a complete OS network sandbox. Browser subresources can still request external origins.
 - JSON state storage is single-MCP-process only. Multi-process usage needs a transactional database and distributed claim locking.

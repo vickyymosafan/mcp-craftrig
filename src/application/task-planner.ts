@@ -141,7 +141,7 @@ export class TaskPlanner {
       });
       const visual = add({
         title: 'Inspect typography, color and motion',
-        description: 'Validate typography scale, semantic colors, contrast, component states, animation intent and reduced-motion behavior.',
+        description: 'Run localhost.audit_visual_a11y across every enabled color scheme (light/dark) and validate typography scale, webfont loading, semantic colors, surface polarity, contrast, component states, animation intent and reduced-motion behavior.',
         ownerRole: 'design-qa-agent', skillIds: ['typography-engineering', 'color-theming', 'motion-animation'], moduleIds: [13, 15, 17, 21, 63],
         domains: ['design', 'motion'], dependsOn: [interaction], parallelGroup: null, requiredEvidence: true,
         recommendedPaths: ['evidence/visual', 'src/theme']
@@ -155,7 +155,7 @@ export class TaskPlanner {
       }) : null;
       const accessibility = add({
         title: 'Run accessibility verification',
-        description: 'Test semantic structure, keyboard order, focus visibility, contrast, zoom and reduced motion.',
+        description: 'Run localhost.audit_visual_a11y (@axe-core/playwright + alpha-composited contrast + ARIA snapshot) across all enabled color schemes, then manually verify incomplete contrast items, keyboard order, focus visibility, zoom and reduced motion.',
         ownerRole: 'accessibility-qa-agent', skillIds: ['accessibility-qa'], moduleIds: [15, 17, 18, 59, 63],
         domains: ['frontend'], dependsOn: [threeDReview ?? visual], parallelGroup: null, requiredEvidence: true,
         recommendedPaths: ['evidence/a11y', 'tests/a11y']

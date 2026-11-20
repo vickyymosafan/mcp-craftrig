@@ -55,6 +55,51 @@ function releaseLocksForTasks(state: HarnessState, taskIds: ReadonlySet<string>)
   }
 }
 
+function validateVisualOrA11yCheckpointEvidence(dimension: string, attached: readonly EvidenceRecord[]): void {
+  if (dimension !== 'typography-color' && dimension !== 'accessibility') return;
+
+  if (attached.every(ev => ev.kind === 'screenshot')) {
+    throw new ValidationError(
+      `Cannot mark ${dimension} PASS using screenshot evidence alone; run localhost.audit_visual_a11y or attach verified contrast/a11y audit evidence.`
+    );
+  }
+
+  const visualA11yReports = attached.filter(
+    ev => ev.kind === 'browser-report' && ev.metadata.auditType === 'visual-a11y'
+  );
+  const nonVisualBrowserReports = attached.filter(
+    ev => ev.kind === 'browser-report' && ev.metadata.auditType !== 'visual-a11y'
+  );
+
+  if (visualA11yReports.length === 0 && nonVisualBrowserReports.length > 0) {
+    throw new ValidationError(
+      `Cannot mark ${dimension} PASS using responsive/interaction browser reports alone; run localhost.audit_visual_a11y first.`
+    );
+  }
+
+  for (const report of visualA11yReports) {
+    const contrastViolations = Number(report.metadata.totalContrastViolations ?? 0);
+    const axeViolations = Number(report.metadata.totalAxeViolations ?? 0);
+    if (report.metadata.overallStatus !== 'pass' || contrastViolations > 0 || axeViolations > 0) {
+      throw new ValidationError(
+        `Cannot mark ${dimension} PASS while visual-a11y audit reports failures (status=${String(report.metadata.overallStatus)}, contrastViolations=${contrastViolations}, axeViolations=${axeViolations}).`
+      );
+    }
+
+    const expectedSchemes = Array.isArray(report.metadata.expectedColorSchemes)
+      ? report.metadata.expectedColorSchemes.map(String)
+      : [];
+    const testedSchemes = Array.isArray(report.metadata.testedColorSchemes)
+      ? new Set(report.metadata.testedColorSchemes.map(String))
+      : new Set<string>();
+    if (expectedSchemes.some(scheme => !testedSchemes.has(scheme))) {
+      throw new ValidationError(
+        `Cannot mark ${dimension} PASS: visual-a11y audit did not test all expected color schemes.`
+      );
+    }
+  }
+}
+
 export interface ListFileLocksFilter {
   planId?: string;
   taskId?: string;
@@ -445,10 +490,14 @@ export class TaskService {
       if (missing.length) throw new ValidationError(`Unknown evidence IDs: ${missing.join(', ')}`);
       const unrelated = evidenceIds.filter(id => state.evidence[id]!.planId !== planId);
       if (unrelated.length) throw new ValidationError(`Checkpoint evidence must belong to this plan: ${unrelated.join(', ')}`);
+      const uniqueIds = [...new Set(evidenceIds)];
+      if (status === 'pass') {
+        validateVisualOrA11yCheckpointEvidence(dimension, uniqueIds.map(id => state.evidence[id]!));
+      }
       const checkpointId = `${planId}:${dimension}`;
       const previous = state.checkpoints[checkpointId];
       if (!previous) throw new NotFoundError('Checkpoint', checkpointId);
-      const checkpoint: QualityCheckpoint = { ...previous, status, evidenceIds: [...new Set(evidenceIds)], reason, updatedAt: now() };
+      const checkpoint: QualityCheckpoint = { ...previous, status, evidenceIds: uniqueIds, reason, updatedAt: now() };
       state.checkpoints[checkpointId] = checkpoint;
       state.plans[planId] = { ...plan, updatedAt: now() };
       return checkpoint;

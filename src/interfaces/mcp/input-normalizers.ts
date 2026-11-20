@@ -1,6 +1,6 @@
 import type { CreatePlanInput } from '../../application/task-planner.js';
 import type { ListFileLocksFilter } from '../../application/task-service.js';
-import type { InteractionAction } from '../../domain/ports.js';
+import type { ColorSchemeMode, InteractionAction, SectionPolarityMode, ViewportProfile, VisualA11yAuditInput } from '../../domain/ports.js';
 import type { WorkDomain } from '../../domain/models.js';
 
 /**
@@ -89,4 +89,35 @@ export function toInteractionActions(
     ...(action.value !== undefined ? { value: action.value } : {}),
     ...(action.timeoutMs !== undefined ? { timeoutMs: action.timeoutMs } : {})
   }));
+}
+
+export interface VisualA11yToolInput {
+  baseUrl: string;
+  routes: string[];
+  colorSchemes: ColorSchemeMode[];
+  viewports?: ViewportProfile[] | undefined;
+  expectedSectionPolarity?: SectionPolarityMode | undefined;
+  themeToggleSelector?: string | undefined;
+  testReducedMotion: boolean;
+  evidenceDirectory: string;
+  timeoutMs: number;
+}
+
+/** Normalize optional visual/a11y audit fields before crossing into BrowserInspectorPort. */
+export function toVisualA11yAuditInput(input: VisualA11yToolInput): VisualA11yAuditInput {
+  return {
+    baseUrl: input.baseUrl,
+    routes: input.routes,
+    colorSchemes: input.colorSchemes,
+    viewports: input.viewports ?? [],
+    ...(input.expectedSectionPolarity !== undefined
+      ? { expectedSectionPolarity: input.expectedSectionPolarity }
+      : {}),
+    ...(input.themeToggleSelector !== undefined
+      ? { themeToggleSelector: input.themeToggleSelector }
+      : {}),
+    testReducedMotion: input.testReducedMotion,
+    evidenceDirectory: input.evidenceDirectory,
+    timeoutMs: input.timeoutMs
+  };
 }

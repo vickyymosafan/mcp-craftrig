@@ -172,7 +172,8 @@ test('MCP server exposes claim_task ownedPaths and file-lock tools end-to-end', 
     const noopInspector: BrowserInspectorPort = {
       discoverRoutes: async () => ({ baseUrl: 'http://127.0.0.1:3000/', routes: ['/'], discoveredAt: new Date().toISOString() }),
       inspectResponsive: async () => { throw new Error('Not used in lock test'); },
-      runInteractionScenario: async () => { throw new Error('Not used in lock test'); }
+      runInteractionScenario: async () => { throw new Error('Not used in lock test'); },
+      auditVisualA11y: async () => { throw new Error('Not used in lock test'); }
     };
     const noopDevServer: DevServerPort = {
       start: async () => { throw new Error('Not used in lock test'); },

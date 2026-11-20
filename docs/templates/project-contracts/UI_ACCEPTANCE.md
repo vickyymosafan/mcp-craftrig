@@ -5,8 +5,8 @@ A route is accepted only when evidence exists for each applicable criterion.
 - [ ] Responsive: all supported routes and viewport profiles pass.
 - [ ] Layout: hierarchy, alignment, spacing, clipping and overflow pass.
 - [ ] Interaction: navigation, forms and interactive controls work.
-- [ ] Typography: font, hierarchy, line length and readability are valid.
-- [ ] Color: semantic tokens and required contrast are verified.
+- [ ] Typography: font, hierarchy, line length, webfont loading and readability are valid.
+- [ ] Color: semantic tokens, user-selected theme modes/polarities (light, dark, contrast bands) and required contrast are verified via automated audit.
 - [ ] Motion: intent, interruption, performance and reduced motion are verified when applicable.
 - [ ] 3D: shader/runtime, resource lifecycle, fallback and GPU behavior are verified when applicable.
 - [ ] Accessibility: keyboard, focus, semantics, zoom and assistive behavior are reviewed.

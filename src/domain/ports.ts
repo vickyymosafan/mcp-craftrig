@@ -9,6 +9,133 @@ export interface BrowserInspectorPort {
   discoverRoutes(baseUrl: string, timeoutMs: number): Promise<{ baseUrl: string; routes: string[]; discoveredAt: string }>;
   inspectResponsive(input: ResponsiveInspectionInput): Promise<ResponsiveInspectionReport>;
   runInteractionScenario(input: InteractionScenarioInput): Promise<InteractionScenarioReport>;
+  auditVisualA11y(input: VisualA11yAuditInput): Promise<VisualA11yAuditReport>;
+}
+
+export type ColorSchemeMode = 'light' | 'dark';
+export type SectionPolarityMode =
+  | 'follow-active-theme'
+  | 'contrast-bands'
+  | 'always-dark-media-showcase'
+  | 'always-light-reading'
+  | 'custom';
+
+export interface VisualA11yAuditInput {
+  baseUrl: string;
+  routes: string[];
+  colorSchemes: ColorSchemeMode[];
+  viewports: ViewportProfile[];
+  expectedSectionPolarity?: SectionPolarityMode;
+  themeToggleSelector?: string;
+  testReducedMotion: boolean;
+  evidenceDirectory: string;
+  timeoutMs: number;
+}
+
+export interface AxeViolationSummary {
+  id: string;
+  impact: string | null;
+  help: string;
+  description: string;
+  targets: string[];
+  failureSummary: string;
+}
+
+export interface ContrastDefect {
+  selector: string;
+  textSample: string;
+  foreground: string;
+  background: string;
+  ratio: number;
+  requiredRatio: number;
+  fontSizePx: number;
+  isLargeText: boolean;
+  source: 'axe' | 'dom-composited';
+}
+
+export interface IncompleteContrastItem {
+  selector: string;
+  textSample: string;
+  reason: string;
+  foreground?: string;
+  background?: string;
+}
+
+export interface TypographyIssue {
+  selector: string;
+  kind: 'tiny-text' | 'clipped-text' | 'wide-measure' | 'font-load-error';
+  detail: string;
+}
+
+export interface TargetSizeIssue {
+  selector: string;
+  width: number;
+  height: number;
+  requiredWidth: number;
+  requiredHeight: number;
+}
+
+export interface OcclusionIssue {
+  selector: string;
+  occludingSelector: string;
+  textSample: string;
+}
+
+export interface PolarityMismatchIssue {
+  selector: string;
+  background: string;
+  luminance: number;
+  detail: string;
+}
+
+export interface VisualA11yCaseResult {
+  route: string;
+  colorScheme: ColorSchemeMode;
+  viewport: ViewportProfile;
+  finalUrl: string;
+  axeViolations: AxeViolationSummary[];
+  contrastIssues: ContrastDefect[];
+  incompleteContrast: IncompleteContrastItem[];
+  typographyIssues: TypographyIssue[];
+  targetSizeIssues: TargetSizeIssue[];
+  occlusionIssues: OcclusionIssue[];
+  polarityIssues: PolarityMismatchIssue[];
+  reducedMotionHiddenCount: number;
+  fontErrors: string[];
+  clsScore: number | null;
+  ariaSnapshotPath: string;
+  screenshotPath: string;
+  consoleErrors: string[];
+  pageErrors: string[];
+  passed: boolean;
+  issues: string[];
+}
+
+export interface ThemeToggleVerification {
+  tested: boolean;
+  selector: string;
+  changed: boolean;
+  beforeState: string;
+  afterState: string;
+  detail: string;
+}
+
+export interface VisualA11yAuditReport {
+  runId: string;
+  baseUrl: string;
+  startedAt: string;
+  finishedAt: string;
+  testedColorSchemes: ColorSchemeMode[];
+  totalCases: number;
+  passedCases: number;
+  failedCases: number;
+  totalContrastViolations: number;
+  totalAxeViolations: number;
+  totalIncompleteContrast: number;
+  themeToggleCheck: ThemeToggleVerification | null;
+  overallStatus: 'pass' | 'fail';
+  results: VisualA11yCaseResult[];
+  reportPath: string;
 }
 
 export interface ResponsiveInspectionInput {

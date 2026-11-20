@@ -9,7 +9,7 @@ import type { WorkspaceGuard } from '../../infrastructure/security/workspace-gua
 import type { FileSkillRegistry } from '../../infrastructure/skills/file-skill-registry.js';
 import type { ModuleRegistry } from '../../infrastructure/catalog/module-registry.js';
 import type { ChecklistDocumentWriter } from '../../infrastructure/persistence/checklist-document-writer.js';
-import { toClaimTaskInput, toCreatePlanInput, toInteractionActions, toListFileLocksFilter, toReleaseFileLocksInput } from './input-normalizers.js';
+import { toClaimTaskInput, toCreatePlanInput, toInteractionActions, toListFileLocksFilter, toReleaseFileLocksInput, toVisualA11yAuditInput } from './input-normalizers.js';
 
 interface Dependencies {
   workspaceRoot: string;
@@ -241,6 +241,71 @@ export function createMcpServer(deps: Dependencies): McpServer {
     const report = await deps.inspector.runInteractionScenario({ baseUrl: input.baseUrl, route: input.route, actions: toInteractionActions(input.actions), evidenceDirectory, timeoutMs: input.timeoutMs, allowRiskyActions: input.allowRiskyActions });
     const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Interaction scenario: ${report.runId}`, description: `${report.steps.filter(step => step.status === 'pass').length}/${report.steps.length} interaction steps passed.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { passed: report.passed, steps: report.steps }, createdBy: input.createdBy });
     return result({ ...report, evidenceId: evidence.id });
+  } catch (error) { return errorResult(error); } });
+
+  server.registerTool('localhost.audit_visual_a11y', {
+    description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost.',
+    inputSchema: z.object({
+      baseUrl: z.string().url(),
+      routes: z.array(z.string()).default(['/']),
+      colorSchemes: z.array(z.enum(['light', 'dark'])).min(1).default(['light', 'dark']),
+      viewports: z.array(viewportSchema).optional(),
+      expectedSectionPolarity: z.enum(['follow-active-theme', 'contrast-bands', 'always-dark-media-showcase', 'always-light-reading', 'custom']).optional(),
+      themeToggleSelector: z.string().min(1).max(200).optional(),
+      testReducedMotion: z.boolean().default(true),
+      timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs),
+      planId: z.string().uuid().nullable().optional(),
+      taskId: z.string().uuid().nullable().optional(),
+      createdBy: z.string().default('accessibility-qa-agent')
+    })
+  }, async input => { try {
+    const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
+    const report = await deps.inspector.auditVisualA11y(toVisualA11yAuditInput({
+      baseUrl: input.baseUrl,
+      routes: input.routes,
+      colorSchemes: input.colorSchemes,
+      viewports: input.viewports,
+      expectedSectionPolarity: input.expectedSectionPolarity,
+      themeToggleSelector: input.themeToggleSelector,
+      testReducedMotion: input.testReducedMotion,
+      evidenceDirectory,
+      timeoutMs: input.timeoutMs
+    }));
+    const evidence = await deps.taskService.recordEvidence({
+      planId: input.planId ?? null,
+      taskId: input.taskId ?? null,
+      kind: 'browser-report',
+      title: `Visual & A11y audit: ${report.runId}`,
+      description: `${report.passedCases}/${report.totalCases} cases passed across [${report.testedColorSchemes.join(', ')}]. Contrast violations: ${report.totalContrastViolations}, axe violations: ${report.totalAxeViolations}, incomplete contrast: ${report.totalIncompleteContrast}.`,
+      path: path.relative(deps.workspaceRoot, report.reportPath),
+      uri: null,
+      metadata: {
+        auditType: 'visual-a11y',
+        runId: report.runId,
+        overallStatus: report.overallStatus,
+        testedColorSchemes: report.testedColorSchemes,
+        expectedColorSchemes: input.colorSchemes,
+        totalContrastViolations: report.totalContrastViolations,
+        totalAxeViolations: report.totalAxeViolations,
+        totalIncompleteContrast: report.totalIncompleteContrast,
+        themeToggleCheck: report.themeToggleCheck,
+        results: report.results.map(item => ({
+          route: item.route,
+          colorScheme: item.colorScheme,
+          viewport: item.viewport.name,
+          passed: item.passed,
+          issues: item.issues
+        }))
+      },
+      createdBy: input.createdBy
+    });
+    return result({
+      ...report,
+      evidenceId: evidence.id,
+      nextAction: report.overallStatus === 'pass'
+        ? 'Review any incompleteContrast items over gradients/canvases, then use this evidence ID for typography-color and accessibility checkpoints.'
+        : 'Fix every contrast, polarity, axe, typography, occlusion, or reduced-motion defect and rerun localhost.audit_visual_a11y. Do not pass checkpoints yet.'
+    });
   } catch (error) { return errorResult(error); } });
 
   const registerResourceWithAlias = (name: string, pathSegment: string, meta: { title: string; description: string; mimeType: string }, handler: (uri: URL) => Promise<any>) => {
