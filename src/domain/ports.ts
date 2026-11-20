@@ -105,6 +105,14 @@ export interface VisualA11yCaseResult {
   clsScore: number | null;
   ariaSnapshotPath: string;
   screenshotPath: string;
+  tracePath?: string | null | undefined;
+  cdpMetrics?: {
+    jsHeapUsedSize?: number | undefined;
+    jsHeapTotalSize?: number | undefined;
+    nodes?: number | undefined;
+    layoutCount?: number | undefined;
+    recalcStyleCount?: number | undefined;
+  } | null | undefined;
   consoleErrors: string[];
   pageErrors: string[];
   passed: boolean;
@@ -170,6 +178,14 @@ export interface ResponsiveViewportResult {
   failedRequests: string[];
   httpErrors: Array<{ status: number; url: string }>;
   screenshotPath: string;
+  tracePath?: string | null | undefined;
+  cdpMetrics?: {
+    jsHeapUsedSize?: number | undefined;
+    jsHeapTotalSize?: number | undefined;
+    nodes?: number | undefined;
+    layoutCount?: number | undefined;
+    recalcStyleCount?: number | undefined;
+  } | null | undefined;
   passed: boolean;
   issues: string[];
 }
@@ -222,6 +238,7 @@ export interface InteractionScenarioReport {
 
 export interface DevServerPort {
   start(packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun', script: 'dev' | 'start' | 'preview'): Promise<{ id: string; pid: number | null; status: string }>;
+  ensure(packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun', script: 'dev' | 'start' | 'preview'): Promise<{ id: string; pid: number | null; status: string; reused: boolean }>;
   status(id: string): Promise<unknown>;
   stop(id: string): Promise<{ id: string; status: string }>;
   stopAll(): Promise<void>;

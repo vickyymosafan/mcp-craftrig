@@ -10,14 +10,26 @@ compatibility: Works with Agent Skills-compatible hosts. Host-native subagent ex
 Represent work as a directed acyclic graph. A task may start only when all dependency tasks are completed. Claim tasks before delegation.
 
 ## Delegation process
-1. Read the task and project context.
+1. Read the task and project context, or fetch the task packet via `craftrig://plans/{planId}/tasks/{taskId}/packet`.
 2. Decompose by independently verifiable outcomes, not by arbitrary file count.
 3. Identify dependencies and shared-file conflicts (`harness.list_file_locks`).
-4. Assign one owner role per task and lock explicit write ownership via `harness.claim_task` (`ownedPaths`) or `harness.acquire_file_locks`.
-5. Group independent tasks with disjoint owned paths into parallel batches.
-6. Send each subagent a bounded context packet listing its locked paths.
-7. Collect structured results and evidence; locks release automatically on `harness.complete_task` or `harness.reopen_task` (or explicitly via `harness.release_file_locks`).
-8. Run integration and regression checks.
+4. Assign one owner role per task and lock explicit write ownership via `harness.claim_task` (`ownedPaths`), `harness.claim_ready_batch`, or `harness.acquire_file_locks`.
+5. Group independent tasks with disjoint owned paths into parallel batches (e.g. `qa-wave` fan-out after integration).
+6. Send each subagent a bounded context packet listing its locked paths and lease duration.
+7. Long-running subagents send periodic heartbeats via `harness.heartbeat_task` to prevent lease expiration.
+8. Collect structured results and evidence; locks release automatically on `harness.complete_task` or `harness.reopen_task` (or explicitly via `harness.release_file_locks`).
+9. Run integration and regression checks.
+
+## Parallel QA Wave
+Following the `integrate-and-build` milestone, UI tasks fan out into a parallel QA wave (`parallelGroup: 'qa-wave'`). The Orchestrator can batch-claim (`harness.claim_ready_batch`) or spawn simultaneous subagents for:
+- Responsive Viewport QA
+- Layout Defect QA
+- Functional Interaction QA
+- Visual & Color Contrast QA (with light-dark() and WCAG audit)
+- 3D WebGL / Shader QA (with frame verification and multi-context leak guard)
+- Accessibility Semantics QA (with axe-core findings)
+
+All QA subagents share the crash-proof `SharedBrowserPool` with concurrent context limiting and automatic CDP forensic trace capture on failures.
 
 ## Subagent output contract
 Return JSON or a clearly structured message with `taskId`, `status`, `summary`, `changedFiles`, `decisions`, `testsRun`, `evidenceIds`, `risks`, and `nextDependencies`.

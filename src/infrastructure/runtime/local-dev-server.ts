@@ -9,6 +9,7 @@ import type { TaskService } from '../../application/task-service.js';
 
 export class LocalDevServerManager implements DevServerPort {
   private readonly children = new Map<string, ChildProcess>();
+  private readonly childMeta = new Map<string, { packageManager: string; script: string }>();
   private readonly logBuffers = new Map<string, string[]>();
   private readonly guard: WorkspaceGuard;
   constructor(private readonly workspaceRoot: string, private readonly tasks: TaskService) { this.guard = new WorkspaceGuard(workspaceRoot); }
@@ -28,6 +29,7 @@ export class LocalDevServerManager implements DevServerPort {
     const args = process.platform === 'win32' ? ['/d', '/s', '/c', `${packageManager} run ${script}`] : ['run', script];
     const child = spawn(command, args, { cwd: this.workspaceRoot, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, BROWSER: 'none' } });
     this.children.set(id, child);
+    this.childMeta.set(id, { packageManager, script });
     this.logBuffers.set(id, []);
     const append = (chunk: Buffer) => {
       const lines = (this.logBuffers.get(id) ?? []).concat(chunk.toString('utf8').split(/\r?\n/).filter(Boolean));
@@ -37,8 +39,24 @@ export class LocalDevServerManager implements DevServerPort {
     child.stderr?.on('data', append);
     child.once('spawn', () => { void this.tasks.updateServerProcess(id, { pid: child.pid ?? null, status: 'running', logs: this.logBuffers.get(id) ?? [] }); });
     child.once('error', error => { void this.tasks.updateServerProcess(id, { status: 'failed', stoppedAt: new Date().toISOString(), logs: [...(this.logBuffers.get(id) ?? []), error.message].slice(-200) }); });
-    child.once('exit', (code) => { void this.tasks.updateServerProcess(id, { status: code === 0 || code === null ? 'stopped' : 'exited', stoppedAt: new Date().toISOString(), exitCode: code, logs: this.logBuffers.get(id) ?? [] }); });
+    child.once('exit', (code) => {
+      this.childMeta.delete(id);
+      void this.tasks.updateServerProcess(id, { status: code === 0 || code === null ? 'stopped' : 'exited', stoppedAt: new Date().toISOString(), exitCode: code, logs: this.logBuffers.get(id) ?? [] });
+    });
     return { id, pid: child.pid ?? null, status: 'starting' };
+  }
+
+  async ensure(packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun', script: 'dev' | 'start' | 'preview') {
+    for (const [id, meta] of this.childMeta.entries()) {
+      if (meta.packageManager === packageManager && meta.script === script) {
+        const child = this.children.get(id);
+        if (child && child.exitCode === null && !child.killed) {
+          return { id, pid: child.pid ?? null, status: 'running', reused: true };
+        }
+      }
+    }
+    const started = await this.start(packageManager, script);
+    return { ...started, reused: false };
   }
 
   async status(id: string) {
@@ -49,8 +67,19 @@ export class LocalDevServerManager implements DevServerPort {
   async stop(id: string) {
     const child = this.children.get(id);
     if (!child) throw new ValidationError(`Process was not started by this MCP server: ${id}`);
-    child.kill('SIGTERM');
+    
+    if (process.platform === 'win32' && child.pid) {
+      try {
+        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      } catch {
+        child.kill('SIGKILL');
+      }
+    } else {
+      child.kill('SIGTERM');
+    }
+
     this.children.delete(id);
+    this.childMeta.delete(id);
     await this.tasks.updateServerProcess(id, { status: 'stopped', stoppedAt: new Date().toISOString() });
     return { id, status: 'stopped' };
   }

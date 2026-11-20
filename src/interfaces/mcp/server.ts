@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -9,7 +9,15 @@ import type { WorkspaceGuard } from '../../infrastructure/security/workspace-gua
 import type { FileSkillRegistry } from '../../infrastructure/skills/file-skill-registry.js';
 import type { ModuleRegistry } from '../../infrastructure/catalog/module-registry.js';
 import type { ChecklistDocumentWriter } from '../../infrastructure/persistence/checklist-document-writer.js';
-import { toClaimTaskInput, toCreatePlanInput, toInteractionActions, toListFileLocksFilter, toReleaseFileLocksInput, toVisualA11yAuditInput } from './input-normalizers.js';
+import {
+  toClaimReadyBatchInput,
+  toClaimTaskInput,
+  toCreatePlanInput,
+  toInteractionActions,
+  toListFileLocksFilter,
+  toReleaseFileLocksInput,
+  toVisualA11yAuditInput
+} from './input-normalizers.js';
 
 interface Dependencies {
   workspaceRoot: string;
@@ -72,7 +80,11 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   function registerToolWithAlias<T extends z.ZodTypeAny>(
     name: string,
-    config: { description: string; inputSchema?: T },
+    config: {
+      description: string;
+      inputSchema?: T;
+      annotations?: { readOnlyHint?: boolean; idempotentHint?: boolean; destructiveHint?: boolean };
+    },
     handler: (input: z.infer<T>) => Promise<any>
   ) {
     (server.registerTool as any)(`craftrig.${name}`, config, handler);
@@ -81,37 +93,83 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   registerToolWithAlias('create_execution_plan', {
     description: 'Create a persistent task DAG for an engineering request. Returns parallel-ready workstreams, agent roles, Skill IDs, module references, and quality checkpoints. The host orchestrator must delegate ready tasks to native subagents.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ title: z.string().min(1).max(160), request: z.string().min(10).max(12000), domains: z.array(z.enum(workDomains)).optional(), maxRepairIterations: z.number().int().min(1).max(12).optional() })
   }, async input => { try { const created = await deps.taskService.createPlan(toCreatePlanInput(input)); const checklistPath = await deps.checklistWriter.write(created.plan.id); return result({ ...created, checklistPath }); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('get_execution_plan', {
     description: 'Read a plan, its tasks, and quality checkpoints.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.getPlan(planId)); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('get_plan_insights', {
     description: 'Get holistic plan intelligence: remaining critical path chain, active bottlenecks blocking downstream work, lock contention risk, and prioritized recommended orchestration actions.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.getPlanInsights(planId)); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('get_ready_tasks', {
     description: 'Return all pending tasks whose dependencies are completed. Claim these in parallel using separate host subagents when file ownership and dependencies allow.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.getReadyTasks(planId)); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('claim_task', {
     description: 'Claim a ready task for one agent and optionally acquire exclusive write locks on workspace-relative ownedPaths. Rejects duplicate task ownership and overlapping active file locks.',
-    inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), ownedPaths: z.array(ownedPathSchema).max(200).optional() })
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      taskId: z.string().uuid(),
+      agentId: z.string().min(1).max(100),
+      ownedPaths: z.array(ownedPathSchema).max(200).optional(),
+      leaseTimeoutMinutes: z.number().int().min(1).max(180).optional()
+    })
   }, async input => { try {
     const normalized = toClaimTaskInput(input);
     if (normalized.ownedPaths) await assertWorkspacePaths(normalized.ownedPaths);
-    const task = await deps.taskService.claimTask(normalized.taskId, normalized.agentId, normalized.ownedPaths);
+    const task = await deps.taskService.claimTask(normalized.taskId, normalized.agentId, normalized.ownedPaths, normalized.leaseTimeoutMs);
     await deps.checklistWriter.write(task.planId);
+    return result(task);
+  } catch (error) { return errorResult(error); } });
+
+  registerToolWithAlias('claim_ready_batch', {
+    description: 'Atomically claim multiple ready tasks simultaneously for a swarm of parallel agents. Validates dependencies and partitions file locks without starvation or race conditions.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      planId: z.string().uuid(),
+      claims: z.array(z.object({
+        taskId: z.string().uuid(),
+        agentId: z.string().min(1).max(100),
+        ownedPaths: z.array(ownedPathSchema).max(200).optional(),
+        leaseTimeoutMinutes: z.number().int().min(1).max(180).optional()
+      })).min(1).max(20)
+    })
+  }, async input => { try {
+    const normalized = toClaimReadyBatchInput(input);
+    for (const claim of normalized.claims) {
+      if (claim.ownedPaths) await assertWorkspacePaths(claim.ownedPaths);
+    }
+    const batchResult = await deps.taskService.claimReadyBatch(normalized.planId, normalized.claims);
+    const checklistPath = await deps.checklistWriter.write(normalized.planId);
+    return result({ ...batchResult, checklistPath });
+  } catch (error) { return errorResult(error); } });
+
+  registerToolWithAlias('heartbeat_task', {
+    description: 'Send a heartbeat for an active in-progress task lease. Extends the expiration timestamp to prevent auto-recovery during long-running tasks.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      taskId: z.string().uuid(),
+      agentId: z.string().min(1).max(100),
+      extendMinutes: z.number().int().min(1).max(180).default(15)
+    })
+  }, async ({ taskId, agentId, extendMinutes }) => { try {
+    const task = await deps.taskService.heartbeatTask(taskId, agentId, extendMinutes * 60 * 1000);
     return result(task);
   } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('acquire_file_locks', {
     description: 'Acquire exclusive path-level write locks for a claimed in-progress task. Rejects conflicting or overlapping paths held by another active task.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200) })
   }, async ({ taskId, agentId, paths }) => { try {
     await assertWorkspacePaths(paths);
@@ -122,6 +180,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   registerToolWithAlias('release_file_locks', {
     description: 'Release path-level file locks owned by the claiming agent on an in-progress task (or all locks held by that task when paths is omitted).',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200).optional() })
   }, async input => { try {
     const normalized = toReleaseFileLocksInput(input);
@@ -133,6 +192,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   registerToolWithAlias('list_file_locks', {
     description: 'List active path-level file locks, optionally filtered by planId, taskId, or overlapping workspace path.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid().optional(), taskId: z.string().uuid().optional(), path: ownedPathSchema.optional() })
   }, async input => { try {
     const filter = toListFileLocksFilter(input);
@@ -142,6 +202,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   registerToolWithAlias('recover_stale_locks', {
     description: 'Recover stale or orphaned file locks held by completed/failed tasks or abandoned agent leases.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid().optional(), maxAgeMinutes: z.number().int().min(1).max(1440).optional() })
   }, async ({ planId, maxAgeMinutes }) => { try {
     const maxAgeMs = (maxAgeMinutes ?? 30) * 60 * 1000;
@@ -152,11 +213,13 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   registerToolWithAlias('complete_task', {
     description: 'Complete, block, or fail a claimed task. Completed tasks that require evidence must include at least one existing evidence ID.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ taskId: z.string().uuid(), status: z.enum(['completed', 'blocked', 'failed']), evidenceIds: z.array(z.string().uuid()).default([]), reason: z.string().max(2000).nullable().optional() })
   }, async ({ taskId, status, evidenceIds, reason }) => { try { const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null); const checklistPath = await deps.checklistWriter.write(task.planId); return result({ task, checklistPath }); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('record_evidence', {
     description: 'Record auditable evidence for a plan or task. Evidence paths must be workspace-relative; do not record an assertion as evidence without an artifact or reproducible source.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), kind: z.enum(['browser-report', 'screenshot', 'test-report', 'build-log', 'security-report', 'manual-review', 'other']), title: z.string().min(1).max(200), description: z.string().max(4000), path: z.string().nullable().optional(), uri: z.string().url().refine(value => value.startsWith('https://'), 'Evidence URI must use HTTPS.').nullable().optional(), metadata: z.record(z.string(), z.unknown()).default({}), createdBy: z.string().min(1).max(100) })
   }, async input => { try {
     const safePath = input.path ? path.relative(deps.workspaceRoot, await deps.guard.resolveExistingFileInsideWorkspace(input.path)) : null;
@@ -165,66 +228,91 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   registerToolWithAlias('update_quality_checkpoint', {
     description: 'Update one quality checkpoint. PASS requires evidence IDs. NOT_APPLICABLE requires an explicit rationale. Use FAIL or BLOCKED when a criterion is not met.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid(), dimension: z.enum(checkpointIds), status: z.enum(['pass', 'fail', 'blocked', 'not_applicable']), evidenceIds: z.array(z.string().uuid()).default([]), reason: z.string().max(2000).nullable().optional() })
   }, async ({ planId, dimension, status, evidenceIds, reason }) => { try { const checkpoint = await deps.taskService.updateCheckpoint(planId, dimension, status, evidenceIds, reason ?? null); const checklistPath = await deps.checklistWriter.write(planId); return result({ checkpoint, checklistPath }); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('evaluate_quality_gate', {
     description: 'Evaluate required acceptance checkpoints for a plan. A PASS is impossible while any required checkpoint is pending, failed, blocked, or missing valid evidence.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.evaluateGate(planId)); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('increment_repair_iteration', {
     description: 'Consume one repair-loop iteration from the plan budget. If the budget is exhausted, the task must be escalated instead of looping indefinitely.',
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.incrementRepairIteration(planId)); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('invalidate_checkpoints', {
     description: 'Invalidate quality checkpoints after a source/configuration change so stale PASS results cannot be reused.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid(), dimensions: z.array(z.enum(checkpointIds)).min(1), reason: z.string().min(3).max(1000) })
   }, async ({ planId, dimensions, reason }) => { try { const checkpoints = await deps.taskService.invalidateCheckpoints(planId, dimensions, reason); const checklistPath = await deps.checklistWriter.write(planId); return result({ checkpoints, checklistPath }); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('reopen_task', {
     description: 'Reopen a task and optionally all downstream dependent tasks after a requirement change or regression. Existing evidence remains in history but is detached from the reopened tasks.',
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
     inputSchema: z.object({ taskId: z.string().uuid(), reason: z.string().min(3).max(1000), cascade: z.boolean().default(true) })
   }, async ({ taskId, reason, cascade }) => { try { const tasks = await deps.taskService.reopenTask(taskId, reason, cascade); const checklistPath = tasks[0] ? await deps.checklistWriter.write(tasks[0].planId) : null; return result({ tasks, checklistPath }); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('list_modules', {
     description: 'Search or list the 70 engineering and governance modules available in the capability catalog.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ filter: z.string().max(120).optional() })
   }, async ({ filter }) => { try { return result(await deps.moduleRegistry.list(filter)); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('list_skills', {
     description: 'List locally available Agent Skills with their descriptions and paths.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({})
   }, async () => { try { return result(await deps.skillRegistry.list()); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.discover_routes', {
     description: 'Open a localhost entry route and discover same-origin anchor routes. Supplement this with source-router inspection because hidden, authenticated, or programmatic routes may not be linked from the page.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs) })
   }, async ({ baseUrl, timeoutMs }) => { try { return result(await deps.inspector.discoverRoutes(baseUrl, timeoutMs)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.wait_for_ready', {
     description: 'Poll a loopback URL until the development site responds. Only localhost/127.0.0.1/::1 URLs are accepted.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ url: z.string().url(), timeoutMs: z.number().int().min(1000).max(120000).default(Math.max(30000, deps.browserTimeoutMs)) })
   }, async ({ url, timeoutMs }) => { try { return result(await waitForLocalUrl(url, timeoutMs)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.start_dev_server', {
     description: 'Start an allowlisted package.json dev/start/preview script inside the configured workspace. Does not run arbitrary shell commands.',
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).default('npm'), script: z.enum(['dev', 'start', 'preview']).default('dev') })
   }, async ({ packageManager, script }) => { try { return result(await deps.devServer.start(packageManager, script)); } catch (error) { return errorResult(error); } });
 
+  server.registerTool('localhost.ensure_dev_server', {
+    description: 'Idempotently ensure a development server is running for an allowlisted package.json script. Reuses existing active process if already running without port collisions.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({ packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).default('npm'), script: z.enum(['dev', 'start', 'preview']).default('dev') })
+  }, async ({ packageManager, script }) => { try { return result(await deps.devServer.ensure(packageManager, script)); } catch (error) { return errorResult(error); } });
+
+  (server.registerTool as any)('craftrig.ensure_dev_server', {
+    description: 'Idempotently ensure a development server is running for an allowlisted package.json script.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({ packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).default('npm'), script: z.enum(['dev', 'start', 'preview']).default('dev') })
+  }, async ({ packageManager, script }: any) => { try { return result(await deps.devServer.ensure(packageManager, script)); } catch (error) { return errorResult(error); } });
+
   server.registerTool('localhost.get_server_status', {
     description: 'Read status and bounded logs for a development server started by this MCP process.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ processId: z.string().uuid() })
   }, async ({ processId }) => { try { return result(await deps.devServer.status(processId)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.stop_dev_server', {
     description: 'Stop only a development server process started and tracked by this MCP process.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
     inputSchema: z.object({ processId: z.string().uuid() })
   }, async ({ processId }) => { try { return result(await deps.devServer.stop(processId)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.inspect_responsive', {
     description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect full-page screenshots, DOM overflow measurements, console/page/network errors, and a JSON report. This is the responsive-first browser QA tool.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), routes: z.array(z.string()).default(['/']), viewports: z.array(viewportSchema).optional(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowedOverflowSelectors: z.array(z.string()).default([]), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('responsive-qa-agent') })
   }, async input => { try {
     const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
@@ -235,6 +323,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   server.registerTool('localhost.run_interaction_scenario', {
     description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. Potentially destructive selectors are blocked unless allowRiskyActions is explicitly true for an isolated test environment.',
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), route: z.string().default('/'), actions: z.array(actionSchema).min(1).max(100), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowRiskyActions: z.boolean().default(false), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('functional-qa-agent') })
   }, async input => { try {
     const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
@@ -245,6 +334,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   server.registerTool('localhost.audit_visual_a11y', {
     description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({
       baseUrl: z.string().url(),
       routes: z.array(z.string()).default(['/']),
@@ -313,6 +403,26 @@ export function createMcpServer(deps: Dependencies): McpServer {
     server.registerResource(`${name}-harness`, `harness://${pathSegment}`, meta, handler);
   };
 
+  const registerResourceTemplateWithAlias = (
+    name: string,
+    templatePattern: string,
+    meta: { title: string; description: string; mimeType: string },
+    handler: (uri: URL, params: Record<string, string>) => Promise<any>
+  ) => {
+    server.registerResource(
+      `${name}-craftrig`,
+      new ResourceTemplate(`craftrig://${templatePattern}`, { list: undefined }),
+      meta,
+      (uri, params) => handler(uri, params as Record<string, string>)
+    );
+    server.registerResource(
+      `${name}-harness`,
+      new ResourceTemplate(`harness://${templatePattern}`, { list: undefined }),
+      meta,
+      (uri, params) => handler(uri, params as Record<string, string>)
+    );
+  };
+
   registerResourceWithAlias('architecture-blueprint', 'architecture', { title: 'Craftrig Architecture', description: 'Clean Architecture layers, agent delegation model, QA loop and boundaries.', mimeType: 'text/markdown' }, async uri => {
     const file = path.join(deps.harnessRoot, 'docs', 'ARCHITECTURE.md');
     const text = await readFile(file, 'utf8').catch(() => '# Architecture\nArchitecture document is not available in the configured workspace.');
@@ -346,6 +456,60 @@ export function createMcpServer(deps: Dependencies): McpServer {
     const text = await readFile(path.join(deps.harnessRoot, 'catalogs', 'agent-roles.json'), 'utf8');
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   });
+
+  registerResourceTemplateWithAlias(
+    'task-packet',
+    'plans/{planId}/tasks/{taskId}/packet',
+    {
+      title: 'Task Execution Packet',
+      description: 'Structured prompt context packet for a task, including parent plan, upstream dependencies, required skills, and catalog modules.',
+      mimeType: 'application/json'
+    },
+    async (uri, params) => {
+      try {
+        const planId = String(params.planId ?? '');
+        const taskId = String(params.taskId ?? '');
+        const { plan, tasks, checkpoints } = await deps.taskService.getPlan(planId);
+        const task = tasks.find(t => t.id === taskId);
+        if (!task) return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ error: `Task ${taskId} not found in plan ${planId}` }) }] };
+        const dependencies = tasks.filter(t => task.dependsOn.includes(t.id));
+        const allModules = await deps.moduleRegistry.list();
+        const relevantModules = allModules.filter(m => task.moduleIds.includes(m.id));
+        const allSkills = await deps.skillRegistry.list();
+        const relevantSkills = allSkills.filter(s => task.skillIds.includes(s.name));
+        const packet = {
+          planId,
+          planTitle: plan.title,
+          task,
+          dependencies,
+          relevantSkills,
+          relevantModules,
+          checkpoints: checkpoints.filter(c => task.domains.some(d => c.id.includes(d)))
+        };
+        return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(packet, null, 2) }] };
+      } catch (err) {
+        return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] };
+      }
+    }
+  );
+
+  registerResourceTemplateWithAlias(
+    'skill-guide',
+    'skills/{skillId}',
+    {
+      title: 'Skill Guidance Document',
+      description: 'Markdown documentation and operational guidance for an Agent Skill.',
+      mimeType: 'text/markdown'
+    },
+    async (uri, params) => {
+      const skillId = String(params.skillId ?? '');
+      const skills = await deps.skillRegistry.list();
+      const skill = skills.find(s => s.name === skillId);
+      if (!skill) return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: `# Skill not found: ${skillId}` }] };
+      const text = await readFile(skill.path, 'utf8').catch(() => `# Unable to read skill file: ${skill.path}`);
+      return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text }] };
+    }
+  );
 
   server.registerPrompt('principal-orchestrator-workflow', {
     title: 'Principal Orchestrator Workflow',

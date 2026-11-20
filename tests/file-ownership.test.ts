@@ -177,6 +177,7 @@ test('MCP server exposes claim_task ownedPaths and file-lock tools end-to-end', 
     };
     const noopDevServer: DevServerPort = {
       start: async () => { throw new Error('Not used in lock test'); },
+      ensure: async () => ({ id: 'none', pid: null, status: 'running', reused: true }),
       status: async () => ({}),
       stop: async () => ({ id: 'none', status: 'stopped' }),
       stopAll: async () => undefined

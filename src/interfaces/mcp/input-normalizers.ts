@@ -19,6 +19,19 @@ export interface ClaimTaskToolInput {
   taskId: string;
   agentId: string;
   ownedPaths?: string[] | undefined;
+  leaseTimeoutMinutes?: number | undefined;
+}
+
+export interface ClaimReadyBatchItemToolInput {
+  taskId: string;
+  agentId: string;
+  ownedPaths?: string[] | undefined;
+  leaseTimeoutMinutes?: number | undefined;
+}
+
+export interface ClaimReadyBatchToolInput {
+  planId: string;
+  claims: ClaimReadyBatchItemToolInput[];
 }
 
 export interface ReleaseFileLocksToolInput {
@@ -53,11 +66,27 @@ export function toCreatePlanInput(input: CreatePlanToolInput): CreatePlanInput {
 }
 
 /** Remove absent ownedPaths before crossing into TaskService. */
-export function toClaimTaskInput(input: ClaimTaskToolInput): { taskId: string; agentId: string; ownedPaths?: string[] } {
+export function toClaimTaskInput(input: ClaimTaskToolInput): { taskId: string; agentId: string; ownedPaths?: string[]; leaseTimeoutMs?: number } {
   return {
     taskId: input.taskId,
     agentId: input.agentId,
-    ...(input.ownedPaths !== undefined ? { ownedPaths: input.ownedPaths } : {})
+    ...(input.ownedPaths !== undefined ? { ownedPaths: input.ownedPaths } : {}),
+    ...(input.leaseTimeoutMinutes !== undefined ? { leaseTimeoutMs: input.leaseTimeoutMinutes * 60 * 1000 } : {})
+  };
+}
+
+export function toClaimReadyBatchInput(input: ClaimReadyBatchToolInput): {
+  planId: string;
+  claims: Array<{ taskId: string; agentId: string; ownedPaths?: string[]; leaseTimeoutMs?: number }>;
+} {
+  return {
+    planId: input.planId,
+    claims: input.claims.map(claim => ({
+      taskId: claim.taskId,
+      agentId: claim.agentId,
+      ...(claim.ownedPaths !== undefined ? { ownedPaths: claim.ownedPaths } : {}),
+      ...(claim.leaseTimeoutMinutes !== undefined ? { leaseTimeoutMs: claim.leaseTimeoutMinutes * 60 * 1000 } : {})
+    }))
   };
 }
 

@@ -1,6 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import type { StateRepository } from '../domain/ports.js';
-import type { EvidenceRecord, ExecutionPlan, FileLockRecord, HarnessState, PlanInsights, QualityCheckpoint, ServerProcessRecord, TaskNode, TaskStatus } from '../domain/models.js';
+import type {
+  BatchClaimItem,
+  BatchClaimResult,
+  EvidenceRecord,
+  ExecutionPlan,
+  FileLockRecord,
+  HarnessState,
+  PlanInsights,
+  QualityCheckpoint,
+  ServerProcessRecord,
+  TaskNode,
+  TaskStatus
+} from '../domain/models.js';
 import { QUALITY_DIMENSIONS } from '../domain/models.js';
 import { ConflictError, NotFoundError, ValidationError } from '../domain/errors.js';
 import { findLockConflict, normalizeOwnedPath, normalizeOwnedPaths, pathsOverlap } from '../domain/file-ownership.js';
@@ -13,12 +25,37 @@ function ensureFileLocks(state: HarnessState): Record<string, FileLockRecord> {
   return (state.fileLocks ??= {});
 }
 
+function autoRecoverExpiredLeases(state: HarnessState, nowMs = Date.now()): number {
+  let recoveredCount = 0;
+  const fileLocks = ensureFileLocks(state);
+  for (const task of Object.values(state.tasks)) {
+    if (task.status === 'in_progress' && task.leaseExpiresAt) {
+      const expires = Date.parse(task.leaseExpiresAt);
+      if (Number.isFinite(expires) && nowMs > expires) {
+        task.status = 'pending';
+        task.claimedBy = null;
+        task.leaseExpiresAt = null;
+        task.updatedAt = new Date(nowMs).toISOString();
+        task.failureReason = `Auto-recovered: agent lease expired at ${new Date(expires).toISOString()}`;
+        for (const [lockPath, lock] of Object.entries(fileLocks)) {
+          if (lock.taskId === task.id) {
+            delete fileLocks[lockPath];
+          }
+        }
+        recoveredCount++;
+      }
+    }
+  }
+  return recoveredCount;
+}
+
 function acquireTaskLocks(
   state: HarnessState,
   task: TaskNode,
   agentId: string,
   pathsToLock: readonly string[],
-  timestamp: string
+  timestamp: string,
+  expiresAt?: string | null
 ): string[] {
   const normalized = normalizeOwnedPaths(pathsToLock);
   const fileLocks = ensureFileLocks(state);
@@ -40,7 +77,8 @@ function acquireTaskLocks(
       planId: task.planId,
       taskId: task.id,
       agentId,
-      acquiredAt: timestamp
+      acquiredAt: timestamp,
+      expiresAt: expiresAt ?? null
     };
   }
   return normalized;
@@ -143,29 +181,31 @@ export class TaskService {
   }
 
   async getReadyTasks(planId: string): Promise<TaskNode[]> {
-    const state = await this.repository.read();
-    const plan = state.plans[planId];
-    if (!plan) throw new NotFoundError('Plan', planId);
-    const planTasks = plan.taskIds.map(id => state.tasks[id]).filter((task): task is TaskNode => Boolean(task));
-    const readyTasks = planTasks.filter(task =>
-      task.status === 'pending' && task.dependsOn.every(depId => state.tasks[depId]?.status === 'completed')
-    );
+    return this.repository.transact(state => {
+      autoRecoverExpiredLeases(state);
+      const plan = state.plans[planId];
+      if (!plan) throw new NotFoundError('Plan', planId);
+      const planTasks = plan.taskIds.map(id => state.tasks[id]).filter((task): task is TaskNode => Boolean(task));
+      const readyTasks = planTasks.filter(task =>
+        task.status === 'pending' && task.dependsOn.every(depId => state.tasks[depId]?.status === 'completed')
+      );
 
-    if (readyTasks.length <= 1) {
-      return readyTasks;
-    }
+      if (readyTasks.length <= 1) {
+        return readyTasks;
+      }
 
-    const metrics = computeDownstreamMetrics(planTasks);
-    return [...readyTasks].sort((a, b) => {
-      const metricA = metrics.get(a.id) ?? { transitiveCount: 0, maxDepth: 0 };
-      const metricB = metrics.get(b.id) ?? { transitiveCount: 0, maxDepth: 0 };
-      if (metricB.transitiveCount !== metricA.transitiveCount) {
-        return metricB.transitiveCount - metricA.transitiveCount;
-      }
-      if (metricB.maxDepth !== metricA.maxDepth) {
-        return metricB.maxDepth - metricA.maxDepth;
-      }
-      return 0;
+      const metrics = computeDownstreamMetrics(planTasks);
+      return [...readyTasks].sort((a, b) => {
+        const metricA = metrics.get(a.id) ?? { transitiveCount: 0, maxDepth: 0 };
+        const metricB = metrics.get(b.id) ?? { transitiveCount: 0, maxDepth: 0 };
+        if (metricB.transitiveCount !== metricA.transitiveCount) {
+          return metricB.transitiveCount - metricA.transitiveCount;
+        }
+        if (metricB.maxDepth !== metricA.maxDepth) {
+          return metricB.maxDepth - metricA.maxDepth;
+        }
+        return 0;
+      });
     });
   }
 
@@ -327,19 +367,137 @@ export class TaskService {
     };
   }
 
-  async claimTask(taskId: string, agentId: string, ownedPaths?: readonly string[]): Promise<TaskNode> {
+  async claimTask(taskId: string, agentId: string, ownedPaths?: readonly string[], leaseTimeoutMs?: number): Promise<TaskNode> {
     if (!agentId.trim()) throw new ValidationError('agentId must not be empty.');
     return this.repository.transact(state => {
+      autoRecoverExpiredLeases(state);
       const task = state.tasks[taskId];
       if (!task) throw new NotFoundError('Task', taskId);
       if (task.status !== 'pending') throw new ConflictError(`Task cannot be claimed from status ${task.status}.`);
       const blockedBy = task.dependsOn.filter(id => state.tasks[id]?.status !== 'completed');
       if (blockedBy.length) throw new ConflictError(`Task dependencies are not complete: ${blockedBy.join(', ')}`);
       const timestamp = now();
+      const leaseMs = leaseTimeoutMs ?? (15 * 60 * 1000);
+      const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
       const targetPaths = ownedPaths !== undefined ? ownedPaths : (task.ownedPaths ?? []);
-      const lockedPaths = acquireTaskLocks(state, task, agentId, targetPaths, timestamp);
-      const updated: TaskNode = { ...task, ownedPaths: lockedPaths, status: 'in_progress', claimedBy: agentId, updatedAt: timestamp };
+      const lockedPaths = acquireTaskLocks(state, task, agentId, targetPaths, timestamp, leaseExpiresAt);
+      const updated: TaskNode = {
+        ...task,
+        ownedPaths: lockedPaths,
+        status: 'in_progress',
+        claimedBy: agentId,
+        updatedAt: timestamp,
+        leaseExpiresAt,
+        leaseTimeoutMs: leaseMs,
+        attemptCount: (task.attemptCount ?? 0) + 1
+      };
       state.tasks[taskId] = updated;
+      const plan = state.plans[task.planId];
+      if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
+      return updated;
+    });
+  }
+
+  async claimReadyBatch(
+    planId: string,
+    claims: readonly BatchClaimItem[]
+  ): Promise<BatchClaimResult> {
+    if (claims.length === 0) throw new ValidationError('At least one claim request is required.');
+    return this.repository.transact(state => {
+      autoRecoverExpiredLeases(state);
+      const plan = state.plans[planId];
+      if (!plan) throw new NotFoundError('Plan', planId);
+
+      const claimedTasks: TaskNode[] = [];
+      const failedTasks: Array<{ taskId: string; reason: string }> = [];
+      const acquiredLocks: string[] = [];
+      const timestamp = now();
+
+      for (const item of claims) {
+        if (!item.agentId?.trim()) {
+          failedTasks.push({ taskId: item.taskId, reason: 'agentId must not be empty.' });
+          continue;
+        }
+        const task = state.tasks[item.taskId];
+        if (!task) {
+          failedTasks.push({ taskId: item.taskId, reason: `Task ${item.taskId} not found.` });
+          continue;
+        }
+        if (task.planId !== planId) {
+          failedTasks.push({ taskId: item.taskId, reason: `Task ${item.taskId} does not belong to plan ${planId}.` });
+          continue;
+        }
+        if (task.status !== 'pending') {
+          failedTasks.push({ taskId: item.taskId, reason: `Task cannot be claimed from status ${task.status}.` });
+          continue;
+        }
+        const blockedBy = task.dependsOn.filter(id => state.tasks[id]?.status !== 'completed');
+        if (blockedBy.length > 0) {
+          failedTasks.push({ taskId: item.taskId, reason: `Dependencies not complete: ${blockedBy.join(', ')}` });
+          continue;
+        }
+
+        const leaseMs = item.leaseTimeoutMs ?? (15 * 60 * 1000);
+        const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+        const targetPaths = item.ownedPaths !== undefined ? item.ownedPaths : (task.ownedPaths ?? []);
+
+        try {
+          const lockedPaths = acquireTaskLocks(state, task, item.agentId, targetPaths, timestamp, leaseExpiresAt);
+          acquiredLocks.push(...lockedPaths);
+          const updated: TaskNode = {
+            ...task,
+            ownedPaths: lockedPaths,
+            status: 'in_progress',
+            claimedBy: item.agentId,
+            updatedAt: timestamp,
+            leaseExpiresAt,
+            leaseTimeoutMs: leaseMs,
+            attemptCount: (task.attemptCount ?? 0) + 1
+          };
+          state.tasks[task.id] = updated;
+          claimedTasks.push(updated);
+        } catch (err) {
+          failedTasks.push({ taskId: item.taskId, reason: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      if (claimedTasks.length > 0) {
+        state.plans[planId] = { ...plan, updatedAt: timestamp };
+      }
+
+      return {
+        claimedTasks,
+        failedTasks,
+        acquiredLocks
+      };
+    });
+  }
+
+  async heartbeatTask(taskId: string, agentId: string, extendMs = 15 * 60 * 1000): Promise<TaskNode> {
+    if (!agentId.trim()) throw new ValidationError('agentId must not be empty.');
+    return this.repository.transact(state => {
+      const task = state.tasks[taskId];
+      if (!task) throw new NotFoundError('Task', taskId);
+      if (task.status !== 'in_progress') throw new ConflictError(`Task must be in_progress to heartbeat. Current: ${task.status}`);
+      if (task.claimedBy !== agentId) throw new ConflictError(`Task is claimed by "${task.claimedBy ?? 'unassigned'}", not "${agentId}".`);
+
+      const timestamp = now();
+      const leaseExpiresAt = new Date(Date.now() + extendMs).toISOString();
+      const updated: TaskNode = {
+        ...task,
+        updatedAt: timestamp,
+        leaseExpiresAt,
+        leaseTimeoutMs: extendMs
+      };
+      state.tasks[taskId] = updated;
+
+      const fileLocks = ensureFileLocks(state);
+      for (const lock of Object.values(fileLocks)) {
+        if (lock.taskId === taskId) {
+          lock.expiresAt = leaseExpiresAt;
+        }
+      }
+
       const plan = state.plans[task.planId];
       if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
       return updated;
@@ -413,14 +571,17 @@ export class TaskService {
       const currentTime = Date.now();
       const recovered: FileLockRecord[] = [];
 
+      autoRecoverExpiredLeases(state, currentTime);
+
       for (const [lockPath, lock] of Object.entries(fileLocks)) {
         if (planId && lock.planId !== planId) continue;
         const task = state.tasks[lock.taskId];
         const isOrphaned = !task || task.status !== 'in_progress';
         const lockAge = currentTime - Date.parse(lock.acquiredAt);
-        const isExpired = Number.isFinite(lockAge) && lockAge > maxAgeMs;
+        const isExpiredByAge = Number.isFinite(lockAge) && lockAge > maxAgeMs;
+        const isExpiredByLease = lock.expiresAt ? currentTime > Date.parse(lock.expiresAt) : false;
 
-        if (isOrphaned || isExpired) {
+        if (isOrphaned || isExpiredByAge || isExpiredByLease) {
           delete fileLocks[lockPath];
           recovered.push(lock);
           if (task && task.ownedPaths.includes(lockPath)) {

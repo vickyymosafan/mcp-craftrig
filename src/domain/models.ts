@@ -9,6 +9,7 @@ export interface FileLockRecord {
   taskId: string;
   agentId: string;
   acquiredAt: string;
+  expiresAt?: string | null;
 }
 
 export interface TaskNode {
@@ -32,6 +33,22 @@ export interface TaskNode {
   updatedAt: string;
   completedAt: string | null;
   failureReason: string | null;
+  leaseExpiresAt?: string | null;
+  leaseTimeoutMs?: number | null;
+  attemptCount?: number;
+}
+
+export interface BatchClaimItem {
+  taskId: string;
+  agentId: string;
+  ownedPaths?: string[];
+  leaseTimeoutMs?: number;
+}
+
+export interface BatchClaimResult {
+  claimedTasks: TaskNode[];
+  failedTasks: Array<{ taskId: string; reason: string }>;
+  acquiredLocks: string[];
 }
 
 export interface QualityCheckpoint {

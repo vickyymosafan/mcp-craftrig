@@ -82,6 +82,87 @@ async function launchSmartBrowser(chromium: typeof import('playwright').chromium
   return await chromium.launch({ headless: true, args: PERFORMANCE_ARGS });
 }
 
+class SharedBrowserPool {
+  private browserPromise: Promise<import('playwright').Browser> | null = null;
+  private activeCount = 0;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private semaphoreAvailable = 4;
+  private readonly waitingQueue: Array<() => void> = [];
+
+  async runWithBrowser<T>(chromium: typeof import('playwright').chromium, fn: (browser: import('playwright').Browser) => Promise<T>): Promise<T> {
+    await this.waitSemaphore();
+    try {
+      const browser = await this.getBrowser(chromium);
+      return await fn(browser);
+    } finally {
+      this.releaseBrowser();
+      this.releaseSemaphore();
+    }
+  }
+
+  private waitSemaphore(): Promise<void> {
+    if (this.semaphoreAvailable > 0) {
+      this.semaphoreAvailable--;
+      return Promise.resolve();
+    }
+    return new Promise<void>(resolve => {
+      this.waitingQueue.push(() => {
+        this.semaphoreAvailable--;
+        resolve();
+      });
+    });
+  }
+
+  private releaseSemaphore(): void {
+    this.semaphoreAvailable++;
+    const next = this.waitingQueue.shift();
+    if (next) next();
+  }
+
+  private async getBrowser(chromium: typeof import('playwright').chromium): Promise<import('playwright').Browser> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    this.activeCount++;
+
+    if (!this.browserPromise) {
+      this.browserPromise = launchSmartBrowser(chromium).catch(err => {
+        this.browserPromise = null;
+        throw err;
+      });
+    }
+
+    const browser = await this.browserPromise;
+    if (!browser.isConnected()) {
+      this.browserPromise = launchSmartBrowser(chromium);
+      return this.browserPromise;
+    }
+    return browser;
+  }
+
+  private releaseBrowser(): void {
+    this.activeCount = Math.max(0, this.activeCount - 1);
+    if (this.activeCount === 0 && this.browserPromise) {
+      this.idleTimer = setTimeout(async () => {
+        if (this.activeCount === 0 && this.browserPromise) {
+          const promise = this.browserPromise;
+          this.browserPromise = null;
+          try {
+            const browser = await promise;
+            await browser.close();
+          } catch {
+            // ignore
+          }
+        }
+      }, 20000);
+      if (this.idleTimer.unref) this.idleTimer.unref();
+    }
+  }
+}
+
+const sharedPool = new SharedBrowserPool();
+
 async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let nextIndex = 0;
@@ -102,30 +183,33 @@ export class PlaywrightInspector implements BrowserInspectorPort {
   async discoverRoutes(baseUrl: string, timeoutMs: number) {
     const base = assertLocalhostUrl(baseUrl);
     const { chromium } = await import('playwright');
-    const browser = await launchSmartBrowser(chromium);
-    try {
+    return sharedPool.runWithBrowser(chromium, async browser => {
       const context = await browser.newContext();
-      await context.route('**/*', async routeRequest => {
-        if (!routeRequest.request().isNavigationRequest()) { await routeRequest.continue(); return; }
-        try {
-          const target = new URL(routeRequest.request().url());
-          if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(target.hostname) || target.origin !== base.origin) { await routeRequest.abort('blockedbyclient'); return; }
-          await routeRequest.continue();
-        } catch { await routeRequest.abort('blockedbyclient'); }
-      });
-      const page = await context.newPage();
-      await page.goto(base.href, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-      const hrefs = await page.locator('a[href]').evaluateAll(anchors => anchors.map(anchor => (anchor as HTMLAnchorElement).href));
-      const routes = new Set<string>(['/']);
-      for (const href of hrefs) {
-        try {
-          const target = new URL(href);
-          if (target.origin !== base.origin) continue;
-          routes.add(`${target.pathname}${target.search}`);
-        } catch { /* Ignore malformed links. */ }
+      try {
+        await context.route('**/*', async routeRequest => {
+          if (!routeRequest.request().isNavigationRequest()) { await routeRequest.continue(); return; }
+          try {
+            const target = new URL(routeRequest.request().url());
+            if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(target.hostname) || target.origin !== base.origin) { await routeRequest.abort('blockedbyclient'); return; }
+            await routeRequest.continue();
+          } catch { await routeRequest.abort('blockedbyclient'); }
+        });
+        const page = await context.newPage();
+        await page.goto(base.href, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+        const hrefs = await page.locator('a[href]').evaluateAll(anchors => anchors.map(anchor => (anchor as HTMLAnchorElement).href));
+        const routes = new Set<string>(['/']);
+        for (const href of hrefs) {
+          try {
+            const target = new URL(href);
+            if (target.origin !== base.origin) continue;
+            routes.add(`${target.pathname}${target.search}`);
+          } catch { /* Ignore malformed links. */ }
+        }
+        return { baseUrl: base.href, routes: [...routes].sort(), discoveredAt: new Date().toISOString() };
+      } finally {
+        await context.close();
       }
-      return { baseUrl: base.href, routes: [...routes].sort(), discoveredAt: new Date().toISOString() };
-    } finally { await browser.close(); }
+    });
   }
 
   async inspectResponsive(input: ResponsiveInspectionInput): Promise<ResponsiveInspectionReport> {
@@ -137,19 +221,18 @@ export class PlaywrightInspector implements BrowserInspectorPort {
     const evidenceDirectory = path.resolve(input.evidenceDirectory);
     await mkdir(evidenceDirectory, { recursive: true });
     const { chromium } = await import('playwright');
-    const browser = await launchSmartBrowser(chromium);
 
-    const tasks: Array<{ route: string; targetUrl: URL; viewport: (typeof profiles)[number] }> = [];
-    for (const routeValue of routes) {
-      const route = safeRoute(routeValue);
-      const targetUrl = new URL(route, base);
-      if (targetUrl.origin !== base.origin) throw new Error('Route escaped the configured localhost origin.');
-      for (const viewport of profiles) {
-        tasks.push({ route, targetUrl, viewport });
+    return sharedPool.runWithBrowser(chromium, async browser => {
+      const tasks: Array<{ route: string; targetUrl: URL; viewport: (typeof profiles)[number] }> = [];
+      for (const routeValue of routes) {
+        const route = safeRoute(routeValue);
+        const targetUrl = new URL(route, base);
+        if (targetUrl.origin !== base.origin) throw new Error('Route escaped the configured localhost origin.');
+        for (const viewport of profiles) {
+          tasks.push({ route, targetUrl, viewport });
+        }
       }
-    }
 
-    try {
       const results: ResponsiveViewportResult[] = await mapConcurrent(tasks, 3, async ({ route, targetUrl, viewport }) => {
         const context = await browser.newContext({
           viewport: { width: viewport.width, height: viewport.height },
@@ -160,6 +243,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           serviceWorkers: 'block',
           bypassCSP: true
         });
+        await context.tracing.start({ screenshots: true, snapshots: true });
         await installWebGLTracker(context);
         const page = await context.newPage();
         const consoleErrors: string[] = [];
@@ -200,6 +284,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           backdropFilterCount: 0
         };
         const issues: string[] = [];
+        let cdpMetrics: ResponsiveViewportResult['cdpMetrics'] = null;
+        let tracePath: string | null = null;
         try {
           const response = await page.goto(targetUrl.href, { waitUntil: 'domcontentloaded', timeout: input.timeoutMs });
           await page.waitForLoadState('networkidle', { timeout: Math.min(input.timeoutMs, 3000) }).catch(() => undefined);
@@ -207,6 +293,26 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           const finalUrl = new URL(page.url());
           if (finalUrl.origin !== base.origin) throw new Error(`Navigation escaped localhost origin: ${finalUrl.origin}`);
           if (response && response.status() >= 400) issues.push(`Route returned HTTP ${response.status()}.`);
+
+          try {
+            const cdp = await context.newCDPSession(page);
+            await cdp.send('Performance.enable').catch(() => {});
+            const perfData = await cdp.send('Performance.getMetrics').catch(() => null);
+            if (perfData?.metrics) {
+              const m = new Map(perfData.metrics.map(x => [x.name, x.value]));
+              cdpMetrics = {
+                jsHeapUsedSize: m.get('JSHeapUsedSize'),
+                jsHeapTotalSize: m.get('JSHeapTotalSize'),
+                nodes: m.get('Nodes'),
+                layoutCount: m.get('LayoutCount'),
+                recalcStyleCount: m.get('RecalcStyleCount')
+              };
+            }
+            await cdp.detach().catch(() => {});
+          } catch {
+            // CDP fallback
+          }
+
           metrics = await page.evaluate((allowedSelectors: string[]) => {
             const doc = document.documentElement;
             const viewportWidth = window.innerWidth;
@@ -275,6 +381,12 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           issues.push(error instanceof Error ? error.message : String(error));
           await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
         } finally {
+          if (issues.length > 0) {
+            tracePath = path.join(caseDirectory, 'trace.zip');
+            await context.tracing.stop({ path: tracePath }).catch(() => {});
+          } else {
+            await context.tracing.stop().catch(() => {});
+          }
           await context.close();
         }
         const finalUrl = page.url();
@@ -293,6 +405,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           failedRequests,
           httpErrors,
           screenshotPath,
+          tracePath,
+          cdpMetrics,
           passed,
           issues
         };
@@ -309,9 +423,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
       await mkdir(path.dirname(report.reportPath), { recursive: true });
       await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
       return report;
-    } finally {
-      await browser.close();
-    }
+    });
   }
 
   async runInteractionScenario(input: InteractionScenarioInput): Promise<InteractionScenarioReport> {
@@ -322,7 +434,6 @@ export class PlaywrightInspector implements BrowserInspectorPort {
     const runId = randomUUID();
     const startedAt = new Date().toISOString();
     const { chromium } = await import('playwright');
-    const browser = await launchSmartBrowser(chromium);
     const steps: InteractionScenarioReport['steps'] = [];
     const directory = path.join(path.resolve(input.evidenceDirectory), runId);
     await mkdir(directory, { recursive: true });
@@ -331,58 +442,63 @@ export class PlaywrightInspector implements BrowserInspectorPort {
     const pageErrors: string[] = [];
     const failedRequests: string[] = [];
     const httpErrors: Array<{ status: number; url: string }> = [];
-    try {
+
+    return sharedPool.runWithBrowser(chromium, async browser => {
       const context = await browser.newContext({ serviceWorkers: 'block', bypassCSP: true });
-      await context.route('**/*', async routeRequest => {
-        if (!routeRequest.request().isNavigationRequest()) { await routeRequest.continue(); return; }
-        try {
-          const navigationUrl = new URL(routeRequest.request().url());
-          if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(navigationUrl.hostname) || navigationUrl.origin !== base.origin) { await routeRequest.abort('blockedbyclient'); return; }
-          await routeRequest.continue();
-        } catch { await routeRequest.abort('blockedbyclient'); }
-      });
-      const page = await context.newPage();
-      page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
-      page.on('pageerror', error => pageErrors.push(error.message));
-      page.on('requestfailed', request => failedRequests.push(`${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? 'unknown'}`));
-      page.on('response', response => { if (response.status() >= 400) httpErrors.push({ status: response.status(), url: response.url() }); });
-      await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: input.timeoutMs });
-      for (const action of input.actions) {
-        try {
-          const locator = page.locator(action.selector).first();
-          const timeout = action.timeoutMs ?? input.timeoutMs;
-          if (!input.allowRiskyActions) {
-            const targetDescription = await locator.evaluate(element => [element.textContent, element.getAttribute('aria-label'), element.getAttribute('name'), element.getAttribute('type'), element.getAttribute('data-testid')].filter(Boolean).join(' ')).catch(() => '');
-            if (/delete|remove|purchase|checkout|pay|submit|logout|sign.?out/i.test(`${action.selector} ${targetDescription}`)) throw new Error('Potentially destructive target blocked. Set allowRiskyActions=true only for an isolated test environment.');
-          }
-          switch (action.action) {
-            case 'click': await locator.click({ timeout }); break;
-            case 'fill': await locator.fill(action.value ?? '', { timeout }); break;
-            case 'check': await locator.check({ timeout }); break;
-            case 'uncheck': await locator.uncheck({ timeout }); break;
-            case 'select': await locator.selectOption(action.value ?? '', { timeout }); break;
-            case 'press': await locator.press(action.value ?? 'Enter', { timeout }); break;
-            case 'expect-visible': await locator.waitFor({ state: 'visible', timeout }); break;
-            case 'expect-text': {
-              const text = await locator.textContent({ timeout });
-              if (!text?.includes(action.value ?? '')) throw new Error(`Expected text not found: ${action.value ?? ''}`);
-              break;
+      try {
+        await context.route('**/*', async routeRequest => {
+          if (!routeRequest.request().isNavigationRequest()) { await routeRequest.continue(); return; }
+          try {
+            const navigationUrl = new URL(routeRequest.request().url());
+            if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(navigationUrl.hostname) || navigationUrl.origin !== base.origin) { await routeRequest.abort('blockedbyclient'); return; }
+            await routeRequest.continue();
+          } catch { await routeRequest.abort('blockedbyclient'); }
+        });
+        const page = await context.newPage();
+        page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+        page.on('pageerror', error => pageErrors.push(error.message));
+        page.on('requestfailed', request => failedRequests.push(`${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? 'unknown'}`));
+        page.on('response', response => { if (response.status() >= 400) httpErrors.push({ status: response.status(), url: response.url() }); });
+        await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: input.timeoutMs });
+        for (const action of input.actions) {
+          try {
+            const locator = page.locator(action.selector).first();
+            const timeout = action.timeoutMs ?? input.timeoutMs;
+            if (!input.allowRiskyActions) {
+              const targetDescription = await locator.evaluate(element => [element.textContent, element.getAttribute('aria-label'), element.getAttribute('name'), element.getAttribute('type'), element.getAttribute('data-testid')].filter(Boolean).join(' ')).catch(() => '');
+              if (/delete|remove|purchase|checkout|pay|submit|logout|sign.?out/i.test(`${action.selector} ${targetDescription}`)) throw new Error('Potentially destructive target blocked. Set allowRiskyActions=true only for an isolated test environment.');
             }
+            switch (action.action) {
+              case 'click': await locator.click({ timeout }); break;
+              case 'fill': await locator.fill(action.value ?? '', { timeout }); break;
+              case 'check': await locator.check({ timeout }); break;
+              case 'uncheck': await locator.uncheck({ timeout }); break;
+              case 'select': await locator.selectOption(action.value ?? '', { timeout }); break;
+              case 'press': await locator.press(action.value ?? 'Enter', { timeout }); break;
+              case 'expect-visible': await locator.waitFor({ state: 'visible', timeout }); break;
+              case 'expect-text': {
+                const text = await locator.textContent({ timeout });
+                if (!text?.includes(action.value ?? '')) throw new Error(`Expected text not found: ${action.value ?? ''}`);
+                break;
+              }
+            }
+            steps.push({ action: action.action, selector: action.selector, status: 'pass' });
+          } catch (error) {
+            steps.push({ action: action.action, selector: action.selector, status: 'fail', error: error instanceof Error ? error.message : String(error) });
           }
-          steps.push({ action: action.action, selector: action.selector, status: 'pass' });
-        } catch (error) {
-          steps.push({ action: action.action, selector: action.selector, status: 'fail', error: error instanceof Error ? error.message : String(error) });
         }
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+      } finally {
+        await context.close();
       }
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-    } finally { await browser.close(); }
-    const finishedAt = new Date().toISOString();
-    const localHttpErrors = httpErrors.filter(item => new URL(item.url).origin === base.origin);
-    const localFailedRequests = failedRequests.filter(value => { try { return new URL(value.match(/https?:\/\/\S+/)?.[0] ?? '').origin === base.origin; } catch { return false; } });
-    const passed = steps.every(step => step.status === 'pass') && consoleErrors.length === 0 && pageErrors.length === 0 && localHttpErrors.length === 0 && localFailedRequests.length === 0;
-    const report: InteractionScenarioReport = { runId, route, passed, startedAt, finishedAt, steps, consoleErrors, pageErrors, failedRequests, httpErrors, screenshotPath, reportPath: path.join(directory, 'interaction-report.json') };
-    await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
-    return report;
+      const finishedAt = new Date().toISOString();
+      const localHttpErrors = httpErrors.filter(item => new URL(item.url).origin === base.origin);
+      const localFailedRequests = failedRequests.filter(value => { try { return new URL(value.match(/https?:\/\/\S+/)?.[0] ?? '').origin === base.origin; } catch { return false; } });
+      const passed = steps.every(step => step.status === 'pass') && consoleErrors.length === 0 && pageErrors.length === 0 && localHttpErrors.length === 0 && localFailedRequests.length === 0;
+      const report: InteractionScenarioReport = { runId, route, passed, startedAt, finishedAt, steps, consoleErrors, pageErrors, failedRequests, httpErrors, screenshotPath, reportPath: path.join(directory, 'interaction-report.json') };
+      await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
+      return report;
+    });
   }
 
   async auditVisualA11y(input: VisualA11yAuditInput): Promise<VisualA11yAuditReport> {
@@ -397,23 +513,22 @@ export class PlaywrightInspector implements BrowserInspectorPort {
 
     const { chromium } = await import('playwright');
     const { AxeBuilder } = await import('@axe-core/playwright');
-    const browser = await launchSmartBrowser(chromium);
 
-    const tasks: Array<{ route: string; targetUrl: URL; colorScheme: ColorSchemeMode; viewport: ViewportProfile }> = [];
-    for (const routeValue of routes) {
-      const route = safeRoute(routeValue);
-      const targetUrl = new URL(route, base);
-      if (targetUrl.origin !== base.origin) throw new Error('Route escaped the configured localhost origin.');
-      for (const colorScheme of colorSchemes) {
-        for (const viewport of profiles) {
-          tasks.push({ route, targetUrl, colorScheme, viewport });
+    return sharedPool.runWithBrowser(chromium, async browser => {
+      const tasks: Array<{ route: string; targetUrl: URL; colorScheme: ColorSchemeMode; viewport: ViewportProfile }> = [];
+      for (const routeValue of routes) {
+        const route = safeRoute(routeValue);
+        const targetUrl = new URL(route, base);
+        if (targetUrl.origin !== base.origin) throw new Error('Route escaped the configured localhost origin.');
+        for (const colorScheme of colorSchemes) {
+          for (const viewport of profiles) {
+            tasks.push({ route, targetUrl, colorScheme, viewport });
+          }
         }
       }
-    }
 
-    let themeToggleCheck: ThemeToggleVerification | null = null;
+      let themeToggleCheck: ThemeToggleVerification | null = null;
 
-    try {
       const results: VisualA11yCaseResult[] = await mapConcurrent(tasks, 2, async ({ route, targetUrl, colorScheme, viewport }) => {
         const context = await browser.newContext({
           viewport: { width: viewport.width, height: viewport.height },
@@ -425,6 +540,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           serviceWorkers: 'block',
           bypassCSP: true
         });
+        await context.tracing.start({ screenshots: true, snapshots: true });
         await context.route('**/*', async routeRequest => {
           if (!routeRequest.request().isNavigationRequest()) { await routeRequest.continue(); return; }
           try {
@@ -465,6 +581,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
         let reducedMotionHiddenCount = 0;
         let fontErrors: string[] = [];
         let clsScore: number | null = null;
+        let cdpMetrics: VisualA11yCaseResult['cdpMetrics'] = null;
+        let tracePath: string | null = null;
 
         try {
           const response = await page.goto(targetUrl.href, { waitUntil: 'domcontentloaded', timeout: input.timeoutMs });
@@ -474,6 +592,25 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           const finalUrl = new URL(page.url());
           if (finalUrl.origin !== base.origin) throw new Error(`Navigation escaped localhost origin: ${finalUrl.origin}`);
           if (response && response.status() >= 400) issues.push(`Route returned HTTP ${response.status()}.`);
+
+          try {
+            const cdp = await context.newCDPSession(page);
+            await cdp.send('Performance.enable').catch(() => {});
+            const perfData = await cdp.send('Performance.getMetrics').catch(() => null);
+            if (perfData?.metrics) {
+              const m = new Map(perfData.metrics.map(x => [x.name, x.value]));
+              cdpMetrics = {
+                jsHeapUsedSize: m.get('JSHeapUsedSize'),
+                jsHeapTotalSize: m.get('JSHeapTotalSize'),
+                nodes: m.get('Nodes'),
+                layoutCount: m.get('LayoutCount'),
+                recalcStyleCount: m.get('RecalcStyleCount')
+              };
+            }
+            await cdp.detach().catch(() => {});
+          } catch {
+            // CDP fallback
+          }
 
           const axeResults = await new AxeBuilder({ page: page as any })
             .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
@@ -536,10 +673,13 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
           await writeFile(ariaSnapshotPath, '# ariaSnapshot skipped due to error', 'utf8').catch(() => undefined);
         } finally {
-          const finalUrl = page.url();
+          if (issues.length > 0) {
+            tracePath = path.join(caseDirectory, 'trace.zip');
+            await context.tracing.stop({ path: tracePath }).catch(() => {});
+          } else {
+            await context.tracing.stop().catch(() => {});
+          }
           await context.close();
-          // Preserve finalUrl closure value
-          void finalUrl;
         }
 
         const passed = issues.length === 0;
@@ -560,6 +700,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           clsScore,
           ariaSnapshotPath,
           screenshotPath,
+          tracePath,
+          cdpMetrics,
           consoleErrors,
           pageErrors,
           passed,
@@ -639,9 +781,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
       await mkdir(path.dirname(report.reportPath), { recursive: true });
       await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
       return report;
-    } finally {
-      await browser.close();
-    }
+    });
   }
 }
 

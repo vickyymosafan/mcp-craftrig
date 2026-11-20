@@ -175,7 +175,10 @@ test('Three.js plans enable frontend work, dedicated 3D QA and a required 3D che
   assert.ok(threeJsQa);
   assert.ok(plan.plan.checkpointIds.includes('3d-rendering'));
   assert.equal(plan.checkpoints.find(item => item.id.endsWith(':3d-rendering'))?.required, true);
-  assert.ok(threeJsQa.dependsOn.includes(plan.tasks.find(task => task.title.includes('typography, color and motion'))!.id));
+  assert.equal(threeJsQa.parallelGroup, 'qa-wave');
+  const integrateTask = plan.tasks.find(task => task.parallelGroup === 'integration');
+  assert.ok(integrateTask);
+  assert.ok(threeJsQa.dependsOn.includes(integrateTask.id));
 });
 
 test('motion quality checkpoint is required only for plans that include motion', async () => {

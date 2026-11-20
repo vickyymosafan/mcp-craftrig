@@ -38,24 +38,32 @@ Dependency rules:
 - MCP: tools and evidence operations. It does not create LLM instances by itself.
 - Skills: portable operating procedures selected by the orchestrator.
 
-## 4. Task graph and file ownership locking
+## 4. Task graph, file ownership locking, and task leases
 
-Tasks are persisted with UUIDs, explicit dependencies, owner role, Skill IDs, module IDs, explicit `ownedPaths`, status, evidence IDs, and timestamps. `get_ready_tasks` returns tasks whose dependencies are all completed. `claim_task` prevents duplicate task ownership and enforces path-level write locking across active tasks in the single MCP process (detecting exact matches and parent/child directory overlaps). Additional paths can be acquired or inspected mid-task with `acquire_file_locks`, `release_file_locks`, and `list_file_locks`; active locks are released automatically when a task completes, fails, blocks, or reopens.
+Tasks are persisted with UUIDs, explicit dependencies, owner role, Skill IDs, module IDs, explicit `ownedPaths`, status, evidence IDs, lease expiration timestamps (`leaseExpiresAt`), and attempt counters. 
 
-The current JSON repository is intended for one local MCP process. Multi-process or team deployment requires a transactional database and distributed locking.
+- `get_ready_tasks` returns tasks whose dependencies are completed, automatically recovering abandoned tasks whose leases expired.
+- `claim_task` and `claim_ready_batch` prevent duplicate task ownership and enforce path-level write locking across active tasks (detecting exact matches and parent/child directory overlaps) with atomic transactions.
+- Long-running agents keep their claims active using `heartbeat_task`.
+- Additional paths can be acquired or inspected mid-task with `acquire_file_locks`, `release_file_locks`, and `list_file_locks`; active locks and leases are released automatically when a task completes, fails, blocks, or reopens.
 
-## 5. QA loop
+State persistence supports both atomic JSON file swapping and high-performance transactional SQLite in WAL mode (`PRAGMA journal_mode = WAL`) using Node 22's native `node:sqlite` engine (`SqliteStateRepository`), eliminating multi-process race conditions.
+
+## 5. QA loop and parallel QA wave
 
 For UI work:
-1. Build and start local server.
-2. Responsive-first inspection across every relevant route and supported viewport profile.
-3. Repair and re-run failed profiles plus impacted regressions.
-4. Layout and visual audit.
-5. Functional interaction tests.
-6. Typography/color and motion review.
-7. Accessibility and performance checks.
-8. Security/reliability and final regression.
-9. Evidence-backed quality gate.
+1. Frontend and styling tasks execute, converging on an `integrate-and-build` milestone task.
+2. Once the build integrates, the task graph fans out into a **Parallel QA Wave** (`parallelGroup: 'qa-wave'`), allowing specialized subagents to run concurrently:
+   - Responsive-first inspection across every relevant route and supported viewport profile.
+   - Layout defect inspection.
+   - Functional interaction tests.
+   - Visual and color contrast audit (light/dark themes, WCAG AA/AAA).
+   - 3D WebGL / Three.js canvas inspection (frame verification, context leak detection).
+   - Accessibility and assistive tech audit.
+3. Browser automation uses `SharedBrowserPool` with an asynchronous semaphore (max 4 concurrent contexts) to prevent system memory/GPU crashes when multiple agents test simultaneously.
+4. On assertion or interaction failure, Playwright exports an execution trace (`trace.zip`) alongside CDP Chrome performance metrics (heap size, DOM nodes, layout count) for post-mortem forensics.
+5. If defects are found, repair cycles increment repair counters and re-verify.
+6. Evidence-backed quality gate verifies all required checkpoints before release.
 
 A later patch invalidates any affected evidence and reopens affected checkpoints.
 

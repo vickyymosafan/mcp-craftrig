@@ -117,63 +117,72 @@ export class TaskPlanner {
     const implementationJoin = implementationIds.length ? implementationIds : [architecture];
     const qaTasks: string[] = [];
     if (hasUi) {
+      const integrateTask = add({
+        title: 'Integrate workstreams and verify local runtime ready',
+        description: 'Verify workspace builds cleanly, bundle size limits are met, clean architecture boundaries are intact, and dev runtime responds on loopback.',
+        ownerRole: 'integration-lead', skillIds: ['clean-architecture-development', 'local-development-runtime'],
+        moduleIds: [6, 12, 19, 21, 26, 65], domains: ['frontend'], dependsOn: implementationJoin, parallelGroup: 'integration', requiredEvidence: true,
+        recommendedPaths: ['package.json', 'src']
+      });
+      qaTasks.push(integrateTask);
+
       const responsiveTask = add({
         title: 'Responsive-first localhost browser inspection',
         description: 'Inspect every supplied route across the viewport matrix, collect screenshots and DOM metrics, repair defects, then re-run affected profiles until PASS or BLOCKED.',
         ownerRole: 'responsive-qa-agent', skillIds: ['responsive-first-browser-qa', 'local-development-runtime'],
-        moduleIds: [9, 15, 18, 39, 42, 43, 63], domains: ['responsive'], dependsOn: implementationJoin, parallelGroup: null, requiredEvidence: true,
+        moduleIds: [9, 15, 18, 39, 42, 43, 63], domains: ['responsive'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['tests/e2e', 'evidence/screenshots']
       });
-      qaTasks.push(responsiveTask);
       const layout = add({
         title: 'Inspect and repair layout and visual structure',
         description: 'Audit hierarchy, alignment, spacing, overflow, clipping, composition and design-system consistency.',
         ownerRole: 'visual-qa-agent', skillIds: ['ui-layout-repair', 'design-direction'], moduleIds: [13, 15, 17, 18, 22, 61, 63],
-        domains: ['design'], dependsOn: [responsiveTask], parallelGroup: null, requiredEvidence: true,
+        domains: ['design'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['evidence/screenshots', 'src/styles']
       });
       const interaction = add({
         title: 'Inspect functional interaction states',
         description: 'Test navigation, forms, controls, keyboard and touch interactions with explicit non-destructive scenarios.',
         ownerRole: 'functional-qa-agent', skillIds: ['interaction-functional-qa'], moduleIds: [15, 18, 34, 60, 63],
-        domains: ['frontend'], dependsOn: [layout], parallelGroup: null, requiredEvidence: true,
+        domains: ['frontend'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['tests/e2e', 'evidence/interaction']
       });
       const visual = add({
         title: 'Inspect typography, color and motion',
         description: 'Run localhost.audit_visual_a11y across every enabled color scheme (light/dark) and validate typography scale, webfont loading, semantic colors, surface polarity, contrast, component states, animation intent and reduced-motion behavior.',
         ownerRole: 'design-qa-agent', skillIds: ['typography-engineering', 'color-theming', 'motion-animation'], moduleIds: [13, 15, 17, 21, 63],
-        domains: ['design', 'motion'], dependsOn: [interaction], parallelGroup: null, requiredEvidence: true,
+        domains: ['design', 'motion'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['evidence/visual', 'src/theme']
       });
       const threeDReview = hasThreeJs ? add({
         title: 'Inspect 3D scene, sculptural detail, shader and lifecycle stability',
         description: 'Inspect multi-part 3D silhouette accuracy per category (no flat 2D cutouts or mismatched placeholders), smooth curvature/bevels, Line2/TubeGeometry seam detail, RoomEnvironment IBL + MeshPhysicalMaterial PBR shading, tonal separation in enabled themes, shader compilation, resource disposal, deterministic scroll behavior, GPU evidence and device fallback.',
         ownerRole: 'threejs-qa-agent', skillIds: ['threejs-shaders', 'performance-qa'], moduleIds: [15, 18, 19, 30, 34, 44, 63],
-        domains: ['threejs'], dependsOn: [visual], parallelGroup: null, requiredEvidence: true,
+        domains: ['threejs'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['evidence/threejs', 'src/shaders']
       }) : null;
       const accessibility = add({
         title: 'Run accessibility verification',
         description: 'Run localhost.audit_visual_a11y (@axe-core/playwright + alpha-composited contrast + ARIA snapshot) across all enabled color schemes, then manually verify incomplete contrast items, keyboard order, focus visibility, zoom and reduced motion.',
         ownerRole: 'accessibility-qa-agent', skillIds: ['accessibility-qa'], moduleIds: [15, 17, 18, 59, 63],
-        domains: ['frontend'], dependsOn: [threeDReview ?? visual], parallelGroup: null, requiredEvidence: true,
+        domains: ['frontend'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['evidence/a11y', 'tests/a11y']
       });
-      qaTasks.push(layout, interaction, visual, ...(threeDReview ? [threeDReview] : []), accessibility);
+      qaTasks.push(responsiveTask, layout, interaction, visual, ...(threeDReview ? [threeDReview] : []), accessibility);
     }
+    const finalDeps = qaTasks.length > 0 ? qaTasks : implementationJoin;
     const securityQA = add({
       title: 'Run security and reliability checks',
       description: 'Inspect exposed surfaces, dependencies, input handling, runtime errors and policy conformance.',
       ownerRole: 'security-qa-agent', skillIds: ['security-review'], moduleIds: [7, 8, 29, 37, 38, 45, 59],
-      domains: ['security'], dependsOn: [...implementationJoin, ...qaTasks.slice(-1)], parallelGroup: 'final-assurance', requiredEvidence: true,
+      domains: ['security'], dependsOn: finalDeps, parallelGroup: 'final-assurance', requiredEvidence: true,
       recommendedPaths: ['evidence/security', 'tests/security']
     });
     const performanceQA = hasUi ? add({
       title: 'Run performance and runtime checks',
       description: 'Inspect build output, loading, console/network errors, browser rendering and relevant GPU/frame budgets.',
       ownerRole: 'performance-qa-agent', skillIds: ['performance-qa', 'threejs-shaders'], moduleIds: [12, 15, 26, 30, 36, 44],
-      domains: ['frontend', ...domains.filter(d => ['threejs', 'motion'].includes(d))], dependsOn: [...implementationJoin, ...qaTasks.slice(-1)], parallelGroup: 'final-assurance', requiredEvidence: true,
+      domains: ['frontend', ...domains.filter(d => ['threejs', 'motion'].includes(d))], dependsOn: finalDeps, parallelGroup: 'final-assurance', requiredEvidence: true,
       recommendedPaths: ['evidence/performance', 'tests/performance']
     }) : null;
     const finalRegression = add({
