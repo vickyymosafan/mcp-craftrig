@@ -43,7 +43,8 @@ This document is the engineering source of truth for changes made by agents and 
 
 - Read existing design contracts before modifying styles or components.
 - Inspect the running application in a browser; source-code review alone is insufficient for UI acceptance.
-- Run responsive-first checks for every in-scope route and supported viewport profile.
+- Run responsive-first checks for every in-scope route and supported viewport profile (fast batch verification via harness inspector).
+- Use the Hybrid Browser QA approach: when defects or overflows occur, inspect live CSS rules and container constraints with `/chrome-devtools` to eliminate guesswork before patching.
 - Repair root causes, then rerun the failing case and impacted regressions.
 - Controls must work and expose correct keyboard, focus, touch and semantic behavior.
 - Animation needs a user or product purpose and must respect reduced-motion preferences.

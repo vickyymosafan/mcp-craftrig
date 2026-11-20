@@ -36,7 +36,8 @@ Build and maintain software with Clean Architecture, Clean Code, explicit eviden
 
 ## UI work
 - Start or identify the local development server.
-- Run responsive-first browser inspection across all relevant routes and supported viewport profiles.
+- Run responsive-first browser inspection across all relevant routes and supported viewport profiles (automated batch scan via Playwright).
+- When layout defects are flagged, escalate to `/chrome-devtools` for surgical CSS cascade & DOM inspection.
 - Repair defects at their root cause, then rerun the failed case and affected regressions.
 - Continue through layout, interaction, visual, typography/color, motion, accessibility, performance, and final regression.
 - Update evidence-backed checklists. No PASS without evidence.

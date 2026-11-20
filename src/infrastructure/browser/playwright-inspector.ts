@@ -31,7 +31,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
   async discoverRoutes(baseUrl: string, timeoutMs: number) {
     const base = assertLocalhostUrl(baseUrl);
     const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ channel: 'chrome', headless: true });
     try {
       const context = await browser.newContext();
       await context.route('**/*', async routeRequest => {
@@ -66,7 +66,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
     const evidenceDirectory = path.resolve(input.evidenceDirectory);
     await mkdir(evidenceDirectory, { recursive: true });
     const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ channel: 'chrome', headless: true });
     const results: ResponsiveViewportResult[] = [];
 
     try {
@@ -190,7 +190,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
     const runId = randomUUID();
     const startedAt = new Date().toISOString();
     const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ channel: 'chrome', headless: true });
     const steps: InteractionScenarioReport['steps'] = [];
     const directory = path.join(path.resolve(input.evidenceDirectory), runId);
     await mkdir(directory, { recursive: true });

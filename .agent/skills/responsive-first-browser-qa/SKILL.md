@@ -12,13 +12,14 @@ Responsive inspection is the first UI quality checkpoint after the local app is 
 ## Procedure
 1. Confirm the server is ready and the base URL is loopback-only.
 2. Discover routes from the router/source-of-truth and user requirements. Do not test only the homepage.
-3. Run `localhost.inspect_responsive` over the supplied routes and the default 13-profile viewport matrix (320, 360, 375, 390, 414, 430, 768 portrait, 844 landscape, 1024 landscape, 1280, 1366, 1440, 1920 CSS px).
+3. Run `localhost.inspect_responsive` over the supplied routes and the default 13-profile viewport matrix (320, 360, 375, 390, 414, 430, 768 portrait, 844 landscape, 1024 landscape, 1280, 1366, 1440, 1920 CSS px) as a fast, token-efficient batch scanner.
 4. Inspect full-page screenshots, document width, overflow elements, out-of-bounds elements, page errors, failed requests, and HTTP errors.
-5. Classify issues by root cause and shared component impact. Avoid one-off CSS patches when the root cause is a reusable component or token.
-6. Delegate repair to the appropriate implementation agent with exact route, viewport, screenshot path, selector/DOM evidence, and acceptance condition.
-7. Rerun the failed case and all affected viewport/route regression cases.
-8. Reopen previously passed responsive checkpoints when later patches can affect layout.
-9. Record a browser-report evidence item and only then update the responsive checkpoint to PASS.
+5. For any failing route/viewport, use the **Hybrid Workflow**: escalate to `/chrome-devtools` (`get_css_styles`, `take_snapshot`, `evaluate_script`) on the offending node to pinpoint exact CSS cascade rules and box-model constraints without guesswork.
+6. Classify issues by root cause and shared component impact. Avoid one-off CSS patches when the root cause is a reusable component or token.
+7. Delegate repair to the appropriate implementation agent with exact route, viewport, screenshot path, selector/DOM evidence, and acceptance condition.
+8. Rerun `localhost.inspect_responsive` on the failed case and all affected viewport/route regression cases.
+9. Reopen previously passed responsive checkpoints when later patches can affect layout.
+10. Record a browser-report evidence item and only then update the responsive checkpoint to PASS.
 
 ## Acceptance
 - No unintended document-level horizontal overflow.
