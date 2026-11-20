@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "description": "User-selectable design menu. The design agent MUST present these options and record the user's choices in DESIGN.md before building UI. Any unanswered question falls back to its `default`.",
+  "questions": [
+    {
+      "id": "personality",
+      "label": "Visual personality",
+      "multi": false,
+      "default": "modern-minimal",
+      "options": ["modern-minimal", "bold-expressive", "editorial-elegant", "playful-friendly", "corporate-trust", "brutalist-raw", "futuristic-tech", "luxury-premium", "organic-calm"]
+    },
+    {
+      "id": "themeMode",
+      "label": "Theme mode",
+      "multi": false,
+      "default": "light-and-dark",
+      "options": ["light-only", "dark-only", "light-and-dark", "system-auto", "high-contrast"]
+    },
+    {
+      "id": "colorFamily",
+      "label": "Color family",
+      "multi": false,
+      "default": "slate-emerald",
+      "options": ["slate-emerald", "navy-ice-cyan", "charcoal-amber", "forest-sage", "earth-cream-brown", "monochrome-black-white", "ocean-blue", "sunset-orange-red", "royal-purple", "rose-pink", "custom-hex"]
+    },
+    {
+      "id": "colorHarmony",
+      "label": "Color harmony",
+      "multi": false,
+      "default": "analogous",
+      "options": ["monochromatic", "analogous", "complementary", "triadic", "neutral-with-single-accent"]
+    },
+    {
+      "id": "accentUsage",
+      "label": "Accent usage",
+      "multi": false,
+      "default": "functional-beacons",
+      "options": ["functional-beacons", "bold-sections", "gradients-allowed", "none-monochrome"]
+    },
+    {
+      "id": "headingFont",
+      "label": "Heading typeface",
+      "multi": false,
+      "default": "inter-tight",
+      "options": ["inter-tight", "space-grotesk", "sora", "plus-jakarta-sans", "playfair-display", "fraunces", "dm-serif-display", "outfit", "manrope", "system-ui", "custom-font"]
+    },
+    {
+      "id": "bodyFont",
+      "label": "Body typeface",
+      "multi": false,
+      "default": "inter",
+      "options": ["inter", "dm-sans", "source-sans-3", "ibm-plex-sans", "lora", "merriweather", "system-ui", "custom-font"]
+    },
+    {
+      "id": "monoFont",
+      "label": "Code / mono typeface",
+      "multi": false,
+      "default": "jetbrains-mono",
+      "options": ["jetbrains-mono", "fira-code", "ibm-plex-mono", "geist-mono", "system-mono", "none"]
+    },
+    {
+      "id": "typeScale",
+      "label": "Type scale",
+      "multi": false,
+      "default": "major-third-fluid",
+      "options": ["minor-third-compact", "major-third-fluid", "perfect-fourth-dramatic", "golden-ratio-editorial"]
+    },
+    {
+      "id": "fontWeightStyle",
+      "label": "Weight and tone",
+      "multi": false,
+      "default": "balanced",
+      "options": ["light-airy", "balanced", "heavy-impact"]
+    },
+    {
+      "id": "layoutPattern",
+      "label": "Layout pattern",
+      "multi": false,
+      "default": "bento-grid",
+      "options": ["bento-grid", "classic-12-column", "asymmetric-editorial", "single-column-narrative", "sidebar-dashboard", "card-masonry", "split-screen"]
+    },
+    {
+      "id": "density",
+      "label": "Density and whitespace",
+      "multi": false,
+      "default": "comfortable",
+      "options": ["compact", "comfortable", "spacious"]
+    },
+    {
+      "id": "maxContentWidth",
+      "label": "Max content width",
+      "multi": false,
+      "default": "1200px",
+      "options": ["960px", "1200px", "1440px", "full-bleed"]
+    },
+    {
+      "id": "navigation",
+      "label": "Navigation style",
+      "multi": false,
+      "default": "sticky-top-bar",
+      "options": ["sticky-top-bar", "sidebar", "bottom-tab-bar-mobile", "hamburger-drawer", "floating-pill", "minimal-inline"]
+    },
+    {
+      "id": "shape",
+      "label": "Corner radius",
+      "multi": false,
+      "default": "rounded-md",
+      "options": ["sharp-0", "rounded-sm", "rounded-md", "rounded-xl", "pill-full"]
+    },
+    {
+      "id": "surface",
+      "label": "Surface treatment",
+      "multi": false,
+      "default": "solid-with-border",
+      "options": ["flat-solid", "solid-with-border", "soft-shadow-elevation", "subtle-glass-limited", "neumorphic-soft", "outlined-only"]
+    },
+    {
+      "id": "iconStyle",
+      "label": "Icon style",
+      "multi": false,
+      "default": "outline-lucide",
+      "options": ["outline-lucide", "filled-solid", "duotone", "phosphor", "emoji-free-none"]
+    },
+    {
+      "id": "imagery",
+      "label": "Imagery and illustration",
+      "multi": true,
+      "default": ["real-product-screenshots"],
+      "options": ["real-product-screenshots", "photography", "3d-render", "flat-illustration", "abstract-shapes", "generated-gradients", "none-text-only"]
+    },
+    {
+      "id": "motionLevel",
+      "label": "Motion level",
+      "multi": false,
+      "default": "subtle-purposeful",
+      "options": ["none-static", "subtle-purposeful", "expressive", "cinematic-scroll-driven"]
+    },
+    {
+      "id": "interactionFeedback",
+      "label": "Interaction feedback",
+      "multi": true,
+      "default": ["hover-lift", "focus-ring"],
+      "options": ["hover-lift", "press-scale", "focus-ring", "ripple", "skeleton-loading", "toast-notifications"]
+    },
+    {
+      "id": "background",
+      "label": "Background treatment",
+      "multi": false,
+      "default": "solid-token",
+      "options": ["solid-token", "subtle-gradient", "mesh-gradient", "noise-texture", "grid-pattern", "3d-canvas-hero"]
+    },
+    {
+      "id": "accessibilityTarget",
+      "label": "Accessibility target",
+      "multi": false,
+      "default": "wcag-aa",
+      "options": ["wcag-aa", "wcag-aaa", "aa-plus-reduced-motion-priority"]
+    },
+    {
+      "id": "responsivePriority",
+      "label": "Responsive priority",
+      "multi": false,
+      "default": "mobile-first",
+      "options": ["mobile-first", "desktop-first", "equal-priority"]
+    },
+    {
+      "id": "contentTone",
+      "label": "Copy tone",
+      "multi": false,
+      "default": "clear-professional",
+      "options": ["clear-professional", "friendly-casual", "technical-precise", "bold-punchy", "formal-enterprise"]
+    },
+    {
+      "id": "language",
+      "label": "Primary language",
+      "multi": false,
+      "default": "en",
+      "options": ["en", "id", "bilingual-en-id", "other"]
+    }
+  ]
+}

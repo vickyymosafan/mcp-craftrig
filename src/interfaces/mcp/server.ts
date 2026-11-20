@@ -254,6 +254,10 @@ export function createMcpServer(deps: Dependencies): McpServer {
     const text = await readFile(path.join(deps.harnessRoot, 'catalogs', 'references.json'), 'utf8');
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   });
+  server.registerResource('design-options', 'harness://design-options', { title: 'Design options menu', description: 'User-selectable design choices (theme mode, color, fonts, layout, typography, motion, accessibility). Present to the user before building UI.', mimeType: 'application/json' }, async uri => {
+    const text = await readFile(path.join(deps.harnessRoot, 'catalogs', 'design-options.json'), 'utf8');
+    return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
+  });
   server.registerResource('runtime-config', 'harness://runtime-config', { title: 'Harness runtime configuration', description: 'Non-secret runtime limits for host orchestration and browser checks.', mimeType: 'application/json' }, async uri => {
     const text = JSON.stringify({ maxParallelTasks: deps.maxParallelTasks, browserTimeoutMs: deps.browserTimeoutMs }, null, 2);
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };

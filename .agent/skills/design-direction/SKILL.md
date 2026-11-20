@@ -6,6 +6,21 @@ compatibility: Works with Agent Skills-compatible hosts and the Principal Agenti
 
 # Design Direction & Visual Polish (Production Standards)
 
+## Step 0: Design Brief Intake (user chooses first)
+Before writing any UI, let the user shape the result. Do not impose the house style below unless the user declines to choose.
+
+1. Read the menu from MCP resource `harness://design-options` (source: `catalogs/design-options.json`). It covers personality, theme mode, color family and harmony, accent usage, heading/body/mono fonts, type scale, weight, layout pattern, density, content width, navigation, corner radius, surface, icons, imagery, motion, background, accessibility target, responsive priority, copy tone and language.
+2. Ask the user using the host's native question UI (multiple choice). Group into at most 3 rounds:
+   - Round 1 (identity): personality, themeMode, colorFamily, colorHarmony, accentUsage.
+   - Round 2 (type and layout): headingFont, bodyFont, monoFont, typeScale, layoutPattern, density, navigation.
+   - Round 3 (finish): shape, surface, iconStyle, imagery, motionLevel, background, accessibilityTarget, contentTone, language.
+   Offer a "You decide" choice per round; it applies the `default` of each question.
+3. Honor free-form answers (a hex color, a named font, a reference site) as `custom-*` choices.
+4. Write every decision into the project's `DESIGN.md` (copy from `docs/templates/project-contracts/DESIGN.md`) under a `## User choices` section, then derive tokens (CSS variables) from it. Later work must read that file, not re-ask.
+5. If a choice conflicts with accessibility (for example low-contrast palette against `wcag-aa`), keep the choice's intent, adjust shades until contrast passes, and tell the user what changed.
+6. The "no pink" rule below is only a default. If the user picks `rose-pink` or `custom-hex` with pink, follow the user.
+7. After building, show the user screenshots (via `localhost.inspect_responsive`) and offer to swap any single choice, then re-run affected checks.
+
 ## Core Philosophy: Distinction between Slop vs. High Craft
 The mandate to "avoid AI slop" does **NOT** mean designing flat, boring, sterile gray websites. It means rejecting cheap, unearned tropes and replacing them with **intentional, high-craft digital artistry**:
 
