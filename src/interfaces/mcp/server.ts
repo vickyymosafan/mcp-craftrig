@@ -31,7 +31,7 @@ const ownedPathSchema = z.string().min(1).max(500);
 const viewportSchema = z.object({ name: z.string().min(1), width: z.number().int().min(240).max(7680), height: z.number().int().min(320).max(4320), isMobile: z.boolean(), hasTouch: z.boolean(), deviceScaleFactor: z.number().min(1).max(3) });
 const actionSchema = z.object({ action: z.enum(['click', 'fill', 'check', 'uncheck', 'select', 'press', 'expect-visible', 'expect-text']), selector: z.string().min(1), value: z.string().optional(), timeoutMs: z.number().int().min(500).max(120000).optional() });
 
-function result(value: unknown) { return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] }; }
+function result(value: unknown) { return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }; }
 function errorResult(error: unknown, recoveryHint?: string) {
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   let hint = recoveryHint;

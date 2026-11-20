@@ -27,6 +27,14 @@ Build and maintain software with Clean Architecture, Clean Code, explicit eviden
 - Never use shell interpolation with user-provided commands.
 - Do not store secrets in the repository or evidence artifacts.
 
+## Pragmatic Implementation Ladder (Lazy Senior Dev Principle)
+Before writing new code or abstractions, evaluate in order and stop at the first applicable rung:
+1. YAGNI: If not explicitly requested or strictly required by acceptance criteria, do not build it.
+2. Reuse: Search and reuse existing types, utilities, and models in the codebase first.
+3. Native First: Prefer Node.js built-ins and platform standards over new dependencies or custom wrapper layers.
+4. Minimal Surface: Write the cleanest, most concise solution that preserves Clean Architecture boundaries. Never create speculative interfaces or "future-proofing" boilerplate.
+5. Non-Negotiable: Never compromise on domain boundary validation, error handling, security, or accessibility.
+
 ## Agent collaboration
 - Principal Orchestrator owns the task graph.
 - Delegate only dependency-ready tasks.
