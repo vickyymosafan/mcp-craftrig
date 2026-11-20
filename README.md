@@ -65,7 +65,7 @@ flowchart TD
 ### 2. Installation & Verification
 ```bash
 # Clone the repository
-git clone https://github.com/vickymosafan/principal-agentic-engineering-harness.git craftrig
+git clone https://github.com/vickyymosafan/mcp-craftrig.git craftrig
 cd craftrig
 
 # Install dependencies
@@ -87,10 +87,10 @@ Add Craftrig to your `claude_desktop_config.json`:
     "craftrig": {
       "command": "node",
       "args": [
-        "d:/principal-agentic-engineering-harness/dist/src/index.js"
+        "d:/craftrig/dist/src/index.js"
       ],
       "env": {
-        "HARNESS_WORKSPACE_ROOT": "d:/your-target-project"
+        "CRAFTRIG_WORKSPACE_ROOT": "d:/your-target-project"
       }
     }
   }
@@ -105,7 +105,7 @@ Add to your `.cursor/mcp.json` or global MCP settings:
     "craftrig": {
       "command": "node",
       "args": [
-        "d:/principal-agentic-engineering-harness/dist/src/index.js"
+        "d:/craftrig/dist/src/index.js"
       ]
     }
   }
@@ -114,7 +114,7 @@ Add to your `.cursor/mcp.json` or global MCP settings:
 
 ### C. Claude Code CLI
 ```bash
-claude mcp add craftrig -- node d:/principal-agentic-engineering-harness/dist/src/index.js
+claude mcp add craftrig -- node d:/craftrig/dist/src/index.js
 ```
 
 ---

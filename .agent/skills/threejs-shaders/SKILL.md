@@ -1,7 +1,7 @@
 ---
 name: threejs-shaders
 description: Implement and inspect production-grade Three.js scenes, WebGL shaders, PBR materials, dynamic procedural VFX, GPU performance, and resource lifecycle.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Three.js & Shader Engineering (Production Standards)

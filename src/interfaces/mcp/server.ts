@@ -70,27 +70,36 @@ export function createMcpServer(deps: Dependencies): McpServer {
     await Promise.all(paths.map(target => deps.guard.resolvePotentialPathInsideWorkspace(target)));
   };
 
-  server.registerTool('harness.create_execution_plan', {
+  function registerToolWithAlias<T extends z.ZodTypeAny>(
+    name: string,
+    config: { description: string; inputSchema?: T },
+    handler: (input: z.infer<T>) => Promise<any>
+  ) {
+    (server.registerTool as any)(`craftrig.${name}`, config, handler);
+    (server.registerTool as any)(`harness.${name}`, config, handler);
+  }
+
+  registerToolWithAlias('create_execution_plan', {
     description: 'Create a persistent task DAG for an engineering request. Returns parallel-ready workstreams, agent roles, Skill IDs, module references, and quality checkpoints. The host orchestrator must delegate ready tasks to native subagents.',
     inputSchema: z.object({ title: z.string().min(1).max(160), request: z.string().min(10).max(12000), domains: z.array(z.enum(workDomains)).optional(), maxRepairIterations: z.number().int().min(1).max(12).optional() })
   }, async input => { try { const created = await deps.taskService.createPlan(toCreatePlanInput(input)); const checklistPath = await deps.checklistWriter.write(created.plan.id); return result({ ...created, checklistPath }); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.get_execution_plan', {
+  registerToolWithAlias('get_execution_plan', {
     description: 'Read a plan, its tasks, and quality checkpoints.',
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.getPlan(planId)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.get_plan_insights', {
+  registerToolWithAlias('get_plan_insights', {
     description: 'Get holistic plan intelligence: remaining critical path chain, active bottlenecks blocking downstream work, lock contention risk, and prioritized recommended orchestration actions.',
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.getPlanInsights(planId)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.get_ready_tasks', {
+  registerToolWithAlias('get_ready_tasks', {
     description: 'Return all pending tasks whose dependencies are completed. Claim these in parallel using separate host subagents when file ownership and dependencies allow.',
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.getReadyTasks(planId)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.claim_task', {
+  registerToolWithAlias('claim_task', {
     description: 'Claim a ready task for one agent and optionally acquire exclusive write locks on workspace-relative ownedPaths. Rejects duplicate task ownership and overlapping active file locks.',
     inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), ownedPaths: z.array(ownedPathSchema).max(200).optional() })
   }, async input => { try {
@@ -101,7 +110,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result(task);
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.acquire_file_locks', {
+  registerToolWithAlias('acquire_file_locks', {
     description: 'Acquire exclusive path-level write locks for a claimed in-progress task. Rejects conflicting or overlapping paths held by another active task.',
     inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200) })
   }, async ({ taskId, agentId, paths }) => { try {
@@ -111,7 +120,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result({ ...acquired, checklistPath });
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.release_file_locks', {
+  registerToolWithAlias('release_file_locks', {
     description: 'Release path-level file locks owned by the claiming agent on an in-progress task (or all locks held by that task when paths is omitted).',
     inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200).optional() })
   }, async input => { try {
@@ -122,7 +131,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result({ ...released, checklistPath });
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.list_file_locks', {
+  registerToolWithAlias('list_file_locks', {
     description: 'List active path-level file locks, optionally filtered by planId, taskId, or overlapping workspace path.',
     inputSchema: z.object({ planId: z.string().uuid().optional(), taskId: z.string().uuid().optional(), path: ownedPathSchema.optional() })
   }, async input => { try {
@@ -131,7 +140,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result(await deps.taskService.listFileLocks(filter));
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.recover_stale_locks', {
+  registerToolWithAlias('recover_stale_locks', {
     description: 'Recover stale or orphaned file locks held by completed/failed tasks or abandoned agent leases.',
     inputSchema: z.object({ planId: z.string().uuid().optional(), maxAgeMinutes: z.number().int().min(1).max(1440).optional() })
   }, async ({ planId, maxAgeMinutes }) => { try {
@@ -141,12 +150,12 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result({ ...recovered, checklistPath });
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.complete_task', {
+  registerToolWithAlias('complete_task', {
     description: 'Complete, block, or fail a claimed task. Completed tasks that require evidence must include at least one existing evidence ID.',
     inputSchema: z.object({ taskId: z.string().uuid(), status: z.enum(['completed', 'blocked', 'failed']), evidenceIds: z.array(z.string().uuid()).default([]), reason: z.string().max(2000).nullable().optional() })
   }, async ({ taskId, status, evidenceIds, reason }) => { try { const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null); const checklistPath = await deps.checklistWriter.write(task.planId); return result({ task, checklistPath }); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.record_evidence', {
+  registerToolWithAlias('record_evidence', {
     description: 'Record auditable evidence for a plan or task. Evidence paths must be workspace-relative; do not record an assertion as evidence without an artifact or reproducible source.',
     inputSchema: z.object({ planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), kind: z.enum(['browser-report', 'screenshot', 'test-report', 'build-log', 'security-report', 'manual-review', 'other']), title: z.string().min(1).max(200), description: z.string().max(4000), path: z.string().nullable().optional(), uri: z.string().url().refine(value => value.startsWith('https://'), 'Evidence URI must use HTTPS.').nullable().optional(), metadata: z.record(z.string(), z.unknown()).default({}), createdBy: z.string().min(1).max(100) })
   }, async input => { try {
@@ -154,37 +163,37 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result(await deps.taskService.recordEvidence({ ...input, path: safePath, planId: input.planId ?? null, taskId: input.taskId ?? null, uri: input.uri ?? null }));
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.update_quality_checkpoint', {
+  registerToolWithAlias('update_quality_checkpoint', {
     description: 'Update one quality checkpoint. PASS requires evidence IDs. NOT_APPLICABLE requires an explicit rationale. Use FAIL or BLOCKED when a criterion is not met.',
     inputSchema: z.object({ planId: z.string().uuid(), dimension: z.enum(checkpointIds), status: z.enum(['pass', 'fail', 'blocked', 'not_applicable']), evidenceIds: z.array(z.string().uuid()).default([]), reason: z.string().max(2000).nullable().optional() })
   }, async ({ planId, dimension, status, evidenceIds, reason }) => { try { const checkpoint = await deps.taskService.updateCheckpoint(planId, dimension, status, evidenceIds, reason ?? null); const checklistPath = await deps.checklistWriter.write(planId); return result({ checkpoint, checklistPath }); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.evaluate_quality_gate', {
+  registerToolWithAlias('evaluate_quality_gate', {
     description: 'Evaluate required acceptance checkpoints for a plan. A PASS is impossible while any required checkpoint is pending, failed, blocked, or missing valid evidence.',
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.evaluateGate(planId)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.increment_repair_iteration', {
+  registerToolWithAlias('increment_repair_iteration', {
     description: 'Consume one repair-loop iteration from the plan budget. If the budget is exhausted, the task must be escalated instead of looping indefinitely.',
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.incrementRepairIteration(planId)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.invalidate_checkpoints', {
+  registerToolWithAlias('invalidate_checkpoints', {
     description: 'Invalidate quality checkpoints after a source/configuration change so stale PASS results cannot be reused.',
     inputSchema: z.object({ planId: z.string().uuid(), dimensions: z.array(z.enum(checkpointIds)).min(1), reason: z.string().min(3).max(1000) })
   }, async ({ planId, dimensions, reason }) => { try { const checkpoints = await deps.taskService.invalidateCheckpoints(planId, dimensions, reason); const checklistPath = await deps.checklistWriter.write(planId); return result({ checkpoints, checklistPath }); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.reopen_task', {
+  registerToolWithAlias('reopen_task', {
     description: 'Reopen a task and optionally all downstream dependent tasks after a requirement change or regression. Existing evidence remains in history but is detached from the reopened tasks.',
     inputSchema: z.object({ taskId: z.string().uuid(), reason: z.string().min(3).max(1000), cascade: z.boolean().default(true) })
   }, async ({ taskId, reason, cascade }) => { try { const tasks = await deps.taskService.reopenTask(taskId, reason, cascade); const checklistPath = tasks[0] ? await deps.checklistWriter.write(tasks[0].planId) : null; return result({ tasks, checklistPath }); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.list_modules', {
+  registerToolWithAlias('list_modules', {
     description: 'Search or list the 70 engineering and governance modules available in the capability catalog.',
     inputSchema: z.object({ filter: z.string().max(120).optional() })
   }, async ({ filter }) => { try { return result(await deps.moduleRegistry.list(filter)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('harness.list_skills', {
+  registerToolWithAlias('list_skills', {
     description: 'List locally available Agent Skills with their descriptions and paths.',
     inputSchema: z.object({})
   }, async () => { try { return result(await deps.skillRegistry.list()); } catch (error) { return errorResult(error); } });
@@ -234,36 +243,41 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result({ ...report, evidenceId: evidence.id });
   } catch (error) { return errorResult(error); } });
 
-  server.registerResource('architecture-blueprint', 'harness://architecture', { title: 'Principal Agentic Engineering Harness Architecture', description: 'Clean Architecture layers, agent delegation model, QA loop and boundaries.', mimeType: 'text/markdown' }, async uri => {
+  const registerResourceWithAlias = (name: string, pathSegment: string, meta: { title: string; description: string; mimeType: string }, handler: (uri: URL) => Promise<any>) => {
+    server.registerResource(`${name}-craftrig`, `craftrig://${pathSegment}`, meta, handler);
+    server.registerResource(`${name}-harness`, `harness://${pathSegment}`, meta, handler);
+  };
+
+  registerResourceWithAlias('architecture-blueprint', 'architecture', { title: 'Craftrig Architecture', description: 'Clean Architecture layers, agent delegation model, QA loop and boundaries.', mimeType: 'text/markdown' }, async uri => {
     const file = path.join(deps.harnessRoot, 'docs', 'ARCHITECTURE.md');
     const text = await readFile(file, 'utf8').catch(() => '# Architecture\nArchitecture document is not available in the configured workspace.');
     return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text }] };
   });
 
-  server.registerResource('principal-development-principles', 'harness://development-principles', { title: 'Principal Development Principles', description: 'Clean Architecture, Clean Code, agent delegation, evidence, UI engineering and security rules.', mimeType: 'text/markdown' }, async uri => {
+  registerResourceWithAlias('principal-development-principles', 'development-principles', { title: 'Craftrig Development Principles', description: 'Clean Architecture, Clean Code, agent delegation, evidence, UI engineering and security rules.', mimeType: 'text/markdown' }, async uri => {
     const file = path.join(deps.harnessRoot, 'docs', 'PRINCIPAL_DEVELOPMENT.md');
     const text = await readFile(file, 'utf8');
     return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text }] };
   });
 
-  server.registerResource('module-catalog', 'harness://modules', { title: '70-module capability catalog', description: 'Read-only catalog of all engineering, security, design, verification and learning capabilities.', mimeType: 'application/json' }, async uri => {
+  registerResourceWithAlias('module-catalog', 'modules', { title: '70-module capability catalog', description: 'Read-only catalog of all engineering, security, design, verification and learning capabilities.', mimeType: 'application/json' }, async uri => {
     const text = await readFile(path.join(deps.harnessRoot, 'catalogs', 'modules.json'), 'utf8');
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   });
-  server.registerResource('reference-catalog', 'harness://references', { title: 'Design reference catalog', description: 'Reference source provenance and verification statuses for the seven design categories.', mimeType: 'application/json' }, async uri => {
+  registerResourceWithAlias('reference-catalog', 'references', { title: 'Design reference catalog', description: 'Reference source provenance and verification statuses for the seven design categories.', mimeType: 'application/json' }, async uri => {
     const text = await readFile(path.join(deps.harnessRoot, 'catalogs', 'references.json'), 'utf8');
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   });
-  server.registerResource('design-options', 'harness://design-options', { title: 'Design options menu', description: 'User-selectable design choices (theme mode, color, fonts, layout, typography, motion, accessibility). Present to the user before building UI.', mimeType: 'application/json' }, async uri => {
+  registerResourceWithAlias('design-options', 'design-options', { title: 'Design options menu', description: 'User-selectable design choices (theme mode, color, fonts, layout, typography, motion, accessibility). Present to the user before building UI.', mimeType: 'application/json' }, async uri => {
     const text = await readFile(path.join(deps.harnessRoot, 'catalogs', 'design-options.json'), 'utf8');
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   });
-  server.registerResource('runtime-config', 'harness://runtime-config', { title: 'Harness runtime configuration', description: 'Non-secret runtime limits for host orchestration and browser checks.', mimeType: 'application/json' }, async uri => {
+  registerResourceWithAlias('runtime-config', 'runtime-config', { title: 'Craftrig runtime configuration', description: 'Non-secret runtime limits for host orchestration and browser checks.', mimeType: 'application/json' }, async uri => {
     const text = JSON.stringify({ maxParallelTasks: deps.maxParallelTasks, browserTimeoutMs: deps.browserTimeoutMs }, null, 2);
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   });
 
-  server.registerResource('agent-role-catalog', 'harness://agent-roles', { title: 'Agent role catalog', description: 'Specialist agent roles and responsibilities for host-native delegation.', mimeType: 'application/json' }, async uri => {
+  registerResourceWithAlias('agent-role-catalog', 'agent-roles', { title: 'Agent role catalog', description: 'Specialist agent roles and responsibilities for host-native delegation.', mimeType: 'application/json' }, async uri => {
     const text = await readFile(path.join(deps.harnessRoot, 'catalogs', 'agent-roles.json'), 'utf8');
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   });
@@ -272,7 +286,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     title: 'Principal Orchestrator Workflow',
     description: 'Plan and coordinate a project task using parallel subagents, Skills, MCP tools and independent verification.',
     argsSchema: z.object({ request: z.string().min(10), projectRoot: z.string().optional() })
-  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse harness.create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via harness.acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
+  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig.create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig.acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
 
   return server;
 }

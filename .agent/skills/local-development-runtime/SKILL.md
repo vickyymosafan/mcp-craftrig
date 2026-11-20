@@ -1,7 +1,7 @@
 ---
 name: local-development-runtime
 description: Start, monitor, and stop a local development server safely so browser agents can inspect the built application.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Local Development Runtime

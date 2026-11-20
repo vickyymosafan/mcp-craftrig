@@ -21,7 +21,7 @@ Use `.cursor/mcp.json` with the same `node dist/src/index.js` command. Set `HARN
 From the target project directory:
 
 ```bash
-claude mcp add principal-harness -- node /absolute/path/to/principal-agentic-engineering-harness/dist/src/index.js
+claude mcp add craftrig -- node /absolute/path/to/craftrig/dist/src/index.js
 ```
 
 Configure environment variables in the host configuration or launch environment. Check `/mcp` to verify that the server is connected.
@@ -30,8 +30,8 @@ Configure environment variables in the host configuration or launch environment.
 
 Register a stdio server using:
 - command: `node`
-- args: `[/absolute/path/to/principal-agentic-engineering-harness/dist/src/index.js]`
-- environment: `HARNESS_WORKSPACE_ROOT=/absolute/path/to/target/project`
+- args: `[/absolute/path/to/craftrig/dist/src/index.js]`
+- environment: `CRAFTRIG_WORKSPACE_ROOT=/absolute/path/to/target/project`
 
 Exact configuration file shape depends on the host version. Consult its current MCP configuration docs.
 

@@ -1,7 +1,7 @@
 ---
 name: design-direction
 description: Establish a distinct, high-craft visual direction and differentiate true premium digital craft from generic AI-generated interface templates.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Design Direction & Visual Polish (Production Standards)

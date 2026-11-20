@@ -1,7 +1,7 @@
 ---
 name: frontend-implementation
 description: Implement responsive, high-craft frontend features using Clean Architecture, modern Bento layouts, micro-interactions, accessibility rules, and maintainable state boundaries.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Frontend Implementation (High-Craft Production Standards)

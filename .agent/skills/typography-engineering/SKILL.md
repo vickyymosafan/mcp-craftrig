@@ -1,7 +1,7 @@
 ---
 name: typography-engineering
 description: Design and audit web typography systems, including modular scales, responsive type, font loading, readability, and accessible hierarchy.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Typography Engineering

@@ -1,7 +1,7 @@
 ---
 name: clean-architecture-development
 description: Implement and refactor software using dependency inversion, cohesive modules, bounded responsibilities, and maintainable change boundaries.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Clean Architecture Development

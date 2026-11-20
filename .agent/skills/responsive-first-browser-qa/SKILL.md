@@ -1,7 +1,7 @@
 ---
 name: responsive-first-browser-qa
 description: Interact with a local website in a real browser, inspect every route across responsive viewport profiles, collect evidence, and drive repair loops.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Responsive-First Browser QA

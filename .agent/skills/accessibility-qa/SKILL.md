@@ -1,7 +1,7 @@
 ---
 name: accessibility-qa
 description: Audit web accessibility including keyboard, semantic structure, focus, contrast, zoom, reduced motion, and assistive technology semantics.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Accessibility QA

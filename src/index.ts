@@ -34,5 +34,5 @@ const shutdown = async () => { await devServer.stopAll(); process.exit(0); };
 process.once('SIGINT', () => { void shutdown(); });
 process.once('SIGTERM', () => { void shutdown(); });
 
-console.error(`Principal Agentic Engineering Harness MCP ready. Workspace: ${workspaceRoot}`);
+console.error(`Craftrig MCP server ready. Workspace: ${workspaceRoot}`);
 await serveStdio(() => createMcpServer({ workspaceRoot, harnessRoot: projectRoot, guard, taskService, inspector, devServer, skillRegistry, moduleRegistry, checklistWriter, maxParallelTasks: runtimeConfig.maxParallelTasks, browserTimeoutMs: runtimeConfig.browserTimeoutMs }));

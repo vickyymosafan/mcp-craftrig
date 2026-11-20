@@ -1,7 +1,7 @@
 ---
 name: security-review
 description: Review application and agent-tool security, permissions, privacy boundaries, supply chain, and policy conformance.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Security Review

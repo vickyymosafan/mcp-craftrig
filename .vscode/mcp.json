@@ -1,10 +1,10 @@
 {
   "servers": {
-    "principal-agentic-harness": {
+    "craftrig": {
       "type": "stdio",
       "command": "node",
       "args": ["${workspaceFolder}/dist/src/index.js"],
-      "env": { "HARNESS_WORKSPACE_ROOT": "${workspaceFolder}" }
+      "env": { "CRAFTRIG_WORKSPACE_ROOT": "${workspaceFolder}" }
     }
   }
 }

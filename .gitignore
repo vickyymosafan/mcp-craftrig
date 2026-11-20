@@ -10,7 +10,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# Harness Runtime State & Evidence
+# Craftrig Runtime State & Evidence
+.craftrig/
 .harness/
 
 # Playwright & Testing

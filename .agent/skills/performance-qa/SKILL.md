@@ -1,7 +1,7 @@
 ---
 name: performance-qa
 description: Measure browser runtime, loading, rendering, network, memory and 3D/GPU performance with repeatable evidence.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Performance QA

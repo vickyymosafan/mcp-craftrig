@@ -1,7 +1,7 @@
 ---
 name: backend-implementation
 description: Implement backend services and APIs with explicit domain boundaries, validation, secure defaults, migrations, and testable contracts.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Backend Implementation

@@ -1,7 +1,7 @@
 ---
 name: ui-layout-repair
 description: Inspect and repair layout defects using screenshots, DOM measurements, design contracts, and minimal maintainable patches.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # UI Layout Repair

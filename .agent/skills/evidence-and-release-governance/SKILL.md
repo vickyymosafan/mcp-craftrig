@@ -1,7 +1,7 @@
 ---
 name: evidence-and-release-governance
 description: Maintain auditable evidence, quality checkpoint status, release readiness, handoff, and human approval boundaries.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Evidence & Release Governance

@@ -1,7 +1,7 @@
 ---
 name: interaction-functional-qa
 description: Test functional UI behaviors in a local browser using explicit scenarios and safe interaction steps.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Interaction & Functional QA

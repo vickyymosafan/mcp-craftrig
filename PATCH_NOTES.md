@@ -1,7 +1,7 @@
 # Windows test portability patch
 
 Apply this patch by extracting its contents into the root of the existing
-`principal-agentic-engineering-harness` project and replacing the two files
+`craftrig` project and replacing the two files
 under `tests/`.
 
 ## Changes
@@ -20,7 +20,7 @@ No production source code or security validation has been weakened.
 
 ## Apply
 
-Extract into `D:\\principal-agentic-engineering-harness` (or the actual project
+Extract into `D:\\craftrig` (or the actual project
 root), replacing files when prompted. Then run:
 
 ```powershell

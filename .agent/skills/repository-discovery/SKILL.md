@@ -1,7 +1,7 @@
 ---
 name: repository-discovery
 description: Map an unfamiliar codebase before making changes. Use for repository onboarding, source-of-truth discovery, architecture mapping, and change-impact analysis.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Repository Discovery

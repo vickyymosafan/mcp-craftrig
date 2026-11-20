@@ -1,7 +1,7 @@
 ---
 name: motion-animation
 description: Plan, implement, audit, and optimize purposeful animation, interaction physics, gesture behavior, reduced motion, and 60 FPS frame performance.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Motion & Animation Engineering (Production Standards)

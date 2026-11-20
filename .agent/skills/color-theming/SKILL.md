@@ -1,7 +1,7 @@
 ---
 name: color-theming
 description: Create and verify semantic color systems, algorithmic palettes, light/dark themes, color contrast, and gamut behavior.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Color & Theming

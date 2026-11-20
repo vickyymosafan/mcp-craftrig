@@ -1,7 +1,7 @@
 ---
 name: design-systems-governance
 description: Extract, define, and enforce a single source of truth for design tokens, reusable components, variants, states, and themes.
-compatibility: Works with Agent Skills-compatible hosts and the Principal Agentic Engineering Harness MCP server.
+compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP server.
 ---
 
 # Design Systems Governance
