@@ -5,7 +5,7 @@ const target = process.argv[2];
 const destinations = {
   claude: '.claude/skills',
   cursor: '.cursor/skills',
-  antigravity: '.agent/skills',
+  agents: '.agents/skills',
   generic: '.agents/skills'
 };
 if (!target || !destinations[target]) {
@@ -13,7 +13,7 @@ if (!target || !destinations[target]) {
   process.exit(2);
 }
 const root = process.cwd();
-const source = path.join(root, '.agents', 'skills');
+const source = path.join(root, '.agent', 'skills');
 const destination = path.join(root, destinations[target]);
 await mkdir(destination, { recursive: true });
 await cp(source, destination, { recursive: true, force: true });

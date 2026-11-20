@@ -26,7 +26,7 @@ const repository = new JsonStateRepository(path.join(stateDirectory, 'state.json
 const taskService = new TaskService(repository, new TaskPlanner(runtimeConfig.maxRepairIterations));
 const inspector = new PlaywrightInspector();
 const devServer = new LocalDevServerManager(workspaceRoot, taskService);
-const skillRegistry = new FileSkillRegistry(path.join(projectRoot, '.agents', 'skills'));
+const skillRegistry = new FileSkillRegistry(path.join(projectRoot, '.agent', 'skills'));
 const moduleRegistry = new ModuleRegistry(path.join(projectRoot, 'catalogs', 'modules.json'));
 const checklistWriter = new ChecklistDocumentWriter(taskService, guard);
 

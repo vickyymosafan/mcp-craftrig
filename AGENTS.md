@@ -6,7 +6,7 @@ Build and maintain software with Clean Architecture, Clean Code, explicit eviden
 ## Source of truth
 - Read `docs/ARCHITECTURE.md` before architectural changes.
 - Read `docs/PRINCIPAL_DEVELOPMENT.md` and `docs/ACCEPTANCE_CRITERIA.md` before substantial changes or declaring work complete.
-- Read only relevant Skills from `.agents/skills/`; do not load every Skill for every task.
+- Read only relevant Skills from `.agent/skills/`; do not load every Skill for every task.
 - `catalogs/modules.json` is the canonical 70-module capability catalog.
 - `catalogs/references.json` records design reference provenance and verification status.
 - `docs/templates/project-contracts/` contains project-level contract templates; copy and tailor only those that apply.

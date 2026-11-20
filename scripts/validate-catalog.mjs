@@ -40,7 +40,7 @@ for (const role of rolesCatalog.roles) {
   roleIds.add(role.id);
 }
 
-const skillsRoot = path.join(root, '.agents', 'skills');
+const skillsRoot = path.join(root, '.agent', 'skills');
 const entries = await readdir(skillsRoot, { withFileTypes: true });
 const skillDirs = entries.filter(entry => entry.isDirectory());
 const skillNames = new Set();

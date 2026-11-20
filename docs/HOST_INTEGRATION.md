@@ -37,12 +37,11 @@ Exact configuration file shape depends on the host version. Consult its current 
 
 ## Skills discovery
 
-Canonical Skills are under `.agents/skills/`. If a host uses a different discovery folder, run:
+Canonical Skills are under `.agent/skills/`. If a host uses a different discovery folder, run:
 
 ```bash
 npm run skills:sync -- claude
 npm run skills:sync -- cursor
-npm run skills:sync -- antigravity
 ```
 
 Check the host documentation for its exact Skill discovery path before copying.
