@@ -1,8 +1,10 @@
 {
-  "name": "principal-agentic-engineering-harness",
+  "name": "craftrig",
   "version": "0.1.0",
   "private": true,
-  "description": "Clean Architecture MCP + Agent Skills harness with agentic task orchestration and localhost browser QA.",
+  "description": "Autonomous multi-agent orchestration, DAG critical-path scheduling, exclusive file locking, and localhost browser QA MCP server.",
+  "author": "vickymosafan",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"

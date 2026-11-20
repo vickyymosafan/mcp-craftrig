@@ -65,7 +65,7 @@ function errorResult(error: unknown, recoveryHint?: string) {
 }
 
 export function createMcpServer(deps: Dependencies): McpServer {
-  const server = new McpServer({ name: 'principal-agentic-engineering-harness', version: '0.1.0' });
+  const server = new McpServer({ name: 'craftrig', version: '0.1.0' });
   const assertWorkspacePaths = async (paths: readonly string[]) => {
     await Promise.all(paths.map(target => deps.guard.resolvePotentialPathInsideWorkspace(target)));
   };

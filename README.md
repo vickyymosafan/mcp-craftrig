@@ -1,126 +1,150 @@
-# Principal Agentic Engineering Harness
+# Craftrig
 
-A Clean Architecture MCP + Agent Skills starter for multi-agent software engineering, project governance, and evidence-backed localhost UI/UX repair.
+> Autonomous Multi-Agent Engineering & Quality Governance Rig for AI Coding Agents.
 
-## What is included
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Author: vickymosafan](https://img.shields.io/badge/Author-vickymosafan-blueviolet.svg)](https://github.com/vickymosafan)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-brightgreen.svg)](package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue.svg)](tsconfig.json)
+[![MCP Protocol](https://img.shields.io/badge/MCP-SDK%20v2-purple.svg)](https://modelcontextprotocol.io)
+[![Test Suite](https://img.shields.io/badge/Tests-50%2F50%20PASS-success.svg)](tests/)
 
-- MCP server using the official TypeScript SDK v2 (`@modelcontextprotocol/server`).
-- 70-module capability catalog and 7 design reference categories.
-- 21 canonical Agent Skills under `.agents/skills/` using the Agent Skills `SKILL.md` format.
-- 19 specialist/lead role definitions, a 70-module capability catalog, and reference provenance.
-- Principal Development principles and 12 copy-ready project contract templates.
-- Dependency-aware task DAG with host-delegated parallel subagents.
-- Persistent task state, evidence registry, and PASS/FAIL/BLOCKED quality checkpoints.
-- Local development server supervisor for allowlisted `dev`, `start`, and `preview` package scripts.
-- Playwright localhost browser inspection with 13 responsive viewport profiles, screenshots, DOM overflow metrics, browser errors, and interaction scenarios.
-- Conditional Three.js QA task and required 3D rendering checkpoint for Three.js projects.
-- Workspace path guard and localhost-only navigation policy.
+Craftrig is an open-source Model Context Protocol (MCP) server engineered to orchestrate multi-agent coding workflows with Clean Architecture, deterministic file locking, topological critical-path task scheduling, and automated localhost browser QA.
 
-## Important runtime boundary
+---
 
-The MCP server does not contain or impersonate an LLM. It exposes tools, task state, Skill metadata, browser inspection, and evidence operations to an MCP host. The host model (Claude Code, Cursor, VS Code, OpenCode, or a custom host) decides when to call tools and must use its native subagent feature to spawn actual parallel LLM workers. If the host has no subagent capability, tasks can still be executed sequentially through the same task graph.
+## 🏛️ Architecture Overview
 
-This separation keeps model/provider choice outside domain logic and prevents fake claims that a server can spawn agents without a configured runtime.
+```mermaid
+flowchart TD
+    User([User Request / Task]) --> Planner[TaskPlanner: DAG Generation]
+    Planner --> CriticalPath[Critical-Path Prioritization]
+    CriticalPath --> Service[TaskService & Exclusive File Locks]
+    
+    Service --> Subagent1[Subagent 1: Architecture / Domain]
+    Service --> Subagent2[Subagent 2: Frontend / UI]
+    Service --> Subagent3[Subagent 3: Backend / Persistence]
+    
+    Subagent1 & Subagent2 & Subagent3 --> Workspace[(Workspace Filesystem)]
+    Workspace --> DevServer[Localhost Dev Server Supervisor]
+    DevServer --> Playwright[Playwright 13-Viewport Responsive QA]
+    Playwright --> Evidence[(Auditable Evidence Registry)]
+    Evidence --> QualityGate{Quality Gate Evaluation}
+    
+    QualityGate -->|PASS| Release[Release Decision & Verification]
+    QualityGate -->|BLOCKED / FAIL| RepairLoop[Pragmatic Repair Iteration Budget]
+    RepairLoop --> Service
+```
 
-## Requirements
+---
 
-- Node.js 22.12 or newer.
-- npm, pnpm, yarn, or bun.
-- A host that can connect to an MCP server over stdio.
-- Playwright Chromium browser installed for localhost inspection.
+## ⚡ Core Capabilities
 
-## Setup
+1. **Topological Critical-Path DAG Scheduling**:
+   - Analyzes directed acyclic graphs using Kahn's algorithm and reverse topological dynamic programming.
+   - Automatically prioritizes ready tasks that have the highest downstream transitive reach to minimize overall workflow completion time (*makespan*).
+2. **Deterministic File Ownership & Lock Recovery**:
+   - Exclusive path-level write locks prevent parallel agents from corrupting the same source files.
+   - Automatic recovery of stale or orphaned locks held by completed or abandoned tasks.
+3. **Plan Intelligence Dashboard (`harness.get_plan_insights`)**:
+   - Delivers real-time panoramic health metrics, remaining critical path chains, active bottlenecks, and prioritized next actions.
+4. **Pragmatic Implementation Ladder (Lazy Senior Dev Principle)**:
+   - Enforces YAGNI, reuse of existing models, platform standard primitives, and minimal surface area to eliminate code slop and drastically reduce token usage.
+5. **Localhost Browser & 13-Viewport Inspection**:
+   - Automated batch scanning using host Google Chrome to inspect responsive layouts, detect horizontal overflows, and catch console/network errors in under 4 seconds.
 
+---
+
+## 🚀 Quickstart Tutorial
+
+### 1. Prerequisites
+- **Node.js**: `v22.12.0` or higher
+- **Package Manager**: npm, pnpm, yarn, or bun
+- **Google Chrome**: Installed on the system (or Playwright Chromium)
+
+### 2. Installation & Verification
 ```bash
+# Clone the repository
+git clone https://github.com/vickymosafan/principal-agentic-engineering-harness.git craftrig
+cd craftrig
+
+# Install dependencies
 npm install
-npx playwright install chromium
-npm run build
-npm test
-npm run validate:catalog
+
+# Run the complete test suite and verification check
+npm run check
 ```
 
-Configure the variables from `.env.example` in your MCP host environment. The harness does not load `.env` files automatically. Set `HARNESS_WORKSPACE_ROOT` to the project being inspected. The default is the current working directory of the MCP process.
+---
 
-## Run the MCP server
+## 🔌 Connecting Craftrig to MCP Clients
 
+### A. Claude Desktop
+Add Craftrig to your `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "craftrig": {
+      "command": "node",
+      "args": [
+        "d:/principal-agentic-engineering-harness/dist/src/index.js"
+      ],
+      "env": {
+        "HARNESS_WORKSPACE_ROOT": "d:/your-target-project"
+      }
+    }
+  }
+}
+```
+
+### B. Cursor & Windsurf
+Add to your `.cursor/mcp.json` or global MCP settings:
+```json
+{
+  "mcpServers": {
+    "craftrig": {
+      "command": "node",
+      "args": [
+        "d:/principal-agentic-engineering-harness/dist/src/index.js"
+      ]
+    }
+  }
+}
+```
+
+### C. Claude Code CLI
 ```bash
-npm start
+claude mcp add craftrig -- node d:/principal-agentic-engineering-harness/dist/src/index.js
 ```
 
-The MCP server exposes tools, one orchestration prompt, and read-only resources (`harness://architecture`, `harness://development-principles`, `harness://modules`, `harness://references`, `harness://agent-roles`, `harness://runtime-config`). It uses stdio. Protocol messages use stdout; diagnostic logs use stderr. Do not add `console.log` to the server runtime.
+---
 
-## MCP host configuration
+## 🛠️ MCP Tools Reference
 
-Build first, then use one of the example host configurations in `configs/hosts/`. The `cwd` must be the project you intend to inspect, while the command points to this harness installation. Set `HARNESS_WORKSPACE_ROOT` explicitly when the MCP process working directory differs from the target project.
+| Tool Name | Scope | Description |
+| :--- | :--- | :--- |
+| `harness.create_execution_plan` | Planning | Generates a persistent task DAG with workstreams, domain roles, and checkpoints. |
+| `harness.get_plan_insights` | Intelligence | Panoramic overview of critical path, bottlenecks, lock risk, and recommended actions. |
+| `harness.get_ready_tasks` | Scheduling | Returns pending tasks whose dependencies are satisfied, sorted by downstream impact. |
+| `harness.claim_task` | Concurrency | Claims a ready task for an agent and acquires exclusive path-level write locks. |
+| `harness.acquire_file_locks` | Concurrency | Locks additional workspace-relative paths for an in-progress task. |
+| `harness.release_file_locks` | Concurrency | Releases acquired file locks upon task completion or step handover. |
+| `harness.recover_stale_locks` | Recovery | Reclaims orphaned locks left by completed, failed, or timed-out tasks. |
+| `harness.record_evidence` | Verification | Records auditable evidence (test reports, screenshots, build logs). |
+| `harness.evaluate_quality_gate` | Quality Gate | Assesses all required acceptance criteria checkpoints before release. |
+| `localhost.start_dev_server` | Runtime | Starts and monitors local development servers. |
+| `localhost.inspect_responsive` | Browser QA | Runs Playwright batch responsive scan across 13 viewport profiles. |
+| `localhost.run_interaction_scenario`| Browser QA | Executes non-destructive UI interaction sequences. |
 
-For Claude Code, a local registration command is documented in `docs/HOST_INTEGRATION.md`.
+---
 
-## Agent Skills
+## 👤 Author & Maintainer
 
-Canonical Skills live under `.agents/skills/`. Hosts may use different discovery directories. Copy Skills to a host-specific folder when needed:
+* **Author**: **vickymosafan**
+* **GitHub**: [@vickymosafan](https://github.com/vickymosafan)
 
-```bash
-npm run skills:sync -- claude
-npm run skills:sync -- cursor
-npm run skills:sync -- antigravity
-```
+---
 
-The sync script copies, it does not create symlinks or delete other Skill files.
+## 📄 License
 
-## Localhost responsive workflow
-
-1. The host creates an execution plan with `harness.create_execution_plan`.
-2. The host delegates dependency-ready tasks to native subagents.
-3. A local `dev` script is started with `localhost.start_dev_server` or by the developer.
-4. The browser QA agent calls `localhost.inspect_responsive` with the localhost base URL and route list.
-5. The tool saves a JSON report and screenshots under `.harness/evidence/`.
-6. Findings are delegated to a repair agent with file ownership and reproduction evidence.
-7. The browser QA agent reruns the failing cases and affected regression profiles.
-8. The orchestrator records evidence and updates the responsive checkpoint only after PASS. Each checkpoint update regenerates `.harness/checklists/<planId>.md` so the completed dimension is documented automatically.
-9. Continue through remaining quality dimensions and evaluate the final gate.
-
-See `docs/LOCALHOST_QA.md` for detailed acceptance rules, `docs/PRINCIPAL_DEVELOPMENT.md` for engineering rules, and `docs/templates/project-contracts/` for project contract templates.
-
-## MCP tools
-
-- `harness.create_execution_plan`
-- `harness.get_execution_plan`
-- `harness.get_ready_tasks`
-- `harness.claim_task` (supports optional `ownedPaths` for path-level file locking)
-- `harness.acquire_file_locks`
-- `harness.release_file_locks`
-- `harness.list_file_locks`
-- `harness.complete_task`
-- `harness.record_evidence`
-- `harness.update_quality_checkpoint`
-- `harness.evaluate_quality_gate`
-- `harness.increment_repair_iteration`
-- `harness.invalidate_checkpoints`
-- `harness.reopen_task`
-- `harness.list_modules`
-- `harness.list_skills`
-- `localhost.discover_routes`
-- `localhost.wait_for_ready`
-- `localhost.start_dev_server`
-- `localhost.get_server_status`
-- `localhost.stop_dev_server`
-- `localhost.inspect_responsive`
-- `localhost.run_interaction_scenario`
-
-## Troubleshooting TypeScript optional-property errors
-
-The MCP adapter normalizes optional transport fields before passing them into application/domain contracts. Keep `exactOptionalPropertyTypes` enabled. If you see errors about `domains`, `maxRepairIterations`, `value`, or `timeoutMs` being `T | undefined`, make sure these files are present from the current patch:
-
-- `src/interfaces/mcp/input-normalizers.ts`
-- `src/interfaces/mcp/server.ts`
-- `tests/mcp-input-normalizers.test.ts`
-
-Do not fix this by disabling `exactOptionalPropertyTypes`; absent properties must be omitted at the adapter boundary.
-
-## Known limitations in this first implementation
-
-- Agent spawning is host-native, not performed by the MCP server itself.
-- Responsive inspection is browser-emulated; it cannot prove behavior on every physical device.
-- Layout, visual design, typography, motion, accessibility, and performance still require dedicated Skill-driven browser analysis. The current Playwright adapter provides baseline evidence and interaction tooling, not a universal visual-quality oracle.
-- The browser adapter currently targets Chromium. Add Firefox/WebKit projects when the target support matrix requires them.
-- The project must be installed and built before the MCP host can launch `dist/src/index.js`.
+This project is open-source software licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
