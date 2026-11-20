@@ -22,6 +22,7 @@ export interface TaskNode {
   domains: WorkDomain[];
   dependsOn: string[];
   ownedPaths: string[];
+  recommendedPaths?: string[];
   status: TaskStatus;
   parallelGroup: string | null;
   requiredEvidence: boolean;
@@ -111,3 +112,34 @@ export const QUALITY_DIMENSIONS = [
 ] as const;
 
 export type QualityDimensionId = typeof QUALITY_DIMENSIONS[number]['id'];
+
+export interface PlanInsights {
+  planId: string;
+  totalTasks: number;
+  completedTasks: number;
+  inProgressTasks: number;
+  pendingTasks: number;
+  failedOrBlockedTasks: number;
+  completionPercentage: number;
+  criticalPath: {
+    taskIds: string[];
+    taskTitles: string[];
+    length: number;
+  };
+  bottlenecks: Array<{
+    taskId: string;
+    title: string;
+    status: TaskStatus;
+    claimedBy: string | null;
+    downstreamDependentCount: number;
+    ownedPaths: string[];
+  }>;
+  activeLocksCount: number;
+  lockContentionRisk: 'low' | 'moderate' | 'high';
+  recommendedActions: Array<{
+    type: 'delegate_ready_tasks' | 'unblock_task' | 'evaluate_gate' | 'escalate_budget' | 'release_stale_locks';
+    priority: 'urgent' | 'high' | 'normal';
+    message: string;
+    targetTaskIds?: string[];
+  }>;
+}

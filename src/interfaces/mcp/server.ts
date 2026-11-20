@@ -80,6 +80,11 @@ export function createMcpServer(deps: Dependencies): McpServer {
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.getPlan(planId)); } catch (error) { return errorResult(error); } });
 
+  server.registerTool('harness.get_plan_insights', {
+    description: 'Get holistic plan intelligence: remaining critical path chain, active bottlenecks blocking downstream work, lock contention risk, and prioritized recommended orchestration actions.',
+    inputSchema: z.object({ planId: z.string().uuid() })
+  }, async ({ planId }) => { try { return result(await deps.taskService.getPlanInsights(planId)); } catch (error) { return errorResult(error); } });
+
   server.registerTool('harness.get_ready_tasks', {
     description: 'Return all pending tasks whose dependencies are completed. Claim these in parallel using separate host subagents when file ownership and dependencies allow.',
     inputSchema: z.object({ planId: z.string().uuid() })

@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { StateRepository } from '../domain/ports.js';
-import type { EvidenceRecord, ExecutionPlan, FileLockRecord, HarnessState, QualityCheckpoint, ServerProcessRecord, TaskNode, TaskStatus } from '../domain/models.js';
+import type { EvidenceRecord, ExecutionPlan, FileLockRecord, HarnessState, PlanInsights, QualityCheckpoint, ServerProcessRecord, TaskNode, TaskStatus } from '../domain/models.js';
 import { QUALITY_DIMENSIONS } from '../domain/models.js';
 import { ConflictError, NotFoundError, ValidationError } from '../domain/errors.js';
 import { findLockConflict, normalizeOwnedPath, normalizeOwnedPaths, pathsOverlap } from '../domain/file-ownership.js';
+import { computeDownstreamMetrics } from '../domain/dag-validator.js';
 import { TaskPlanner, type CreatePlanInput } from './task-planner.js';
 
 const now = () => new Date().toISOString();
@@ -100,9 +101,185 @@ export class TaskService {
     const state = await this.repository.read();
     const plan = state.plans[planId];
     if (!plan) throw new NotFoundError('Plan', planId);
-    return plan.taskIds.map(id => state.tasks[id]).filter((task): task is TaskNode => Boolean(task)).filter(task =>
+    const planTasks = plan.taskIds.map(id => state.tasks[id]).filter((task): task is TaskNode => Boolean(task));
+    const readyTasks = planTasks.filter(task =>
       task.status === 'pending' && task.dependsOn.every(depId => state.tasks[depId]?.status === 'completed')
     );
+
+    if (readyTasks.length <= 1) {
+      return readyTasks;
+    }
+
+    const metrics = computeDownstreamMetrics(planTasks);
+    return [...readyTasks].sort((a, b) => {
+      const metricA = metrics.get(a.id) ?? { transitiveCount: 0, maxDepth: 0 };
+      const metricB = metrics.get(b.id) ?? { transitiveCount: 0, maxDepth: 0 };
+      if (metricB.transitiveCount !== metricA.transitiveCount) {
+        return metricB.transitiveCount - metricA.transitiveCount;
+      }
+      if (metricB.maxDepth !== metricA.maxDepth) {
+        return metricB.maxDepth - metricA.maxDepth;
+      }
+      return 0;
+    });
+  }
+
+  async getPlanInsights(planId: string): Promise<PlanInsights> {
+    const state = await this.repository.read();
+    const plan = state.plans[planId];
+    if (!plan) throw new NotFoundError('Plan', planId);
+
+    const tasks = plan.taskIds.map(id => state.tasks[id]).filter((task): task is TaskNode => Boolean(task));
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter(t => t.status === 'completed').length;
+    const inProgressTasks = tasks.filter(t => t.status === 'in_progress').length;
+    const pendingTasks = tasks.filter(t => t.status === 'pending').length;
+    const failedOrBlockedTasks = tasks.filter(t => t.status === 'failed' || t.status === 'blocked').length;
+    const completionPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+    const metrics = computeDownstreamMetrics(tasks);
+
+    // Critical path among unfinished tasks
+    const unfinishedMap = new Map<string, TaskNode>();
+    for (const task of tasks) {
+      if (task.status !== 'completed') {
+        unfinishedMap.set(task.id, task);
+      }
+    }
+
+    let criticalPath: { taskIds: string[]; taskTitles: string[]; length: number } = {
+      taskIds: [],
+      taskTitles: [],
+      length: 0
+    };
+
+    if (unfinishedMap.size > 0) {
+      const memoPath = new Map<string, string[]>();
+
+      const getLongestPath = (id: string): string[] => {
+        if (memoPath.has(id)) return memoPath.get(id)!;
+        const taskMetric = metrics.get(id);
+        const unfinishedDependents = (taskMetric?.directDependents ?? []).filter(depId => unfinishedMap.has(depId));
+
+        let bestChildPath: string[] = [];
+        for (const depId of unfinishedDependents) {
+          const childPath = getLongestPath(depId);
+          if (childPath.length > bestChildPath.length) {
+            bestChildPath = childPath;
+          }
+        }
+
+        const fullPath = [id, ...bestChildPath];
+        memoPath.set(id, fullPath);
+        return fullPath;
+      };
+
+      let bestPath: string[] = [];
+      for (const [id] of unfinishedMap.entries()) {
+        const path = getLongestPath(id);
+        if (path.length > bestPath.length) {
+          bestPath = path;
+        }
+      }
+
+      criticalPath = {
+        taskIds: bestPath,
+        taskTitles: bestPath.map(id => state.tasks[id]?.title ?? id),
+        length: bestPath.length
+      };
+    }
+
+    // Top active or pending bottlenecks by downstream dependent count
+    const bottlenecks = tasks
+      .filter(t => t.status !== 'completed')
+      .sort((a, b) => {
+        const countA = metrics.get(a.id)?.transitiveCount ?? 0;
+        const countB = metrics.get(b.id)?.transitiveCount ?? 0;
+        return countB - countA;
+      })
+      .slice(0, 5)
+      .map(t => ({
+        taskId: t.id,
+        title: t.title,
+        status: t.status,
+        claimedBy: t.claimedBy,
+        downstreamDependentCount: metrics.get(t.id)?.transitiveCount ?? 0,
+        ownedPaths: t.ownedPaths
+      }));
+
+    // File locks & contention risk
+    const fileLocks = ensureFileLocks(state);
+    const planLocks = Object.values(fileLocks).filter(l => l.planId === planId);
+    const activeLocksCount = planLocks.length;
+
+    let lockContentionRisk: 'low' | 'moderate' | 'high' = 'low';
+    if (failedOrBlockedTasks > 1 && activeLocksCount > 0) {
+      lockContentionRisk = 'high';
+    } else if (activeLocksCount >= 6 || (failedOrBlockedTasks > 0 && activeLocksCount > 0)) {
+      lockContentionRisk = 'moderate';
+    }
+
+    // Recommended next actions
+    const recommendedActions: PlanInsights['recommendedActions'] = [];
+
+    const troubledTasks = tasks.filter(t => t.status === 'blocked' || t.status === 'failed');
+    for (const troubled of troubledTasks) {
+      recommendedActions.push({
+        type: 'unblock_task',
+        priority: 'urgent',
+        message: `Task "${troubled.title}" is ${troubled.status} (${troubled.failureReason ?? 'no failure reason provided'}). Reopen or unblock to resume workflow.`,
+        targetTaskIds: [troubled.id]
+      });
+    }
+
+    if (plan.repairIterations >= plan.maxRepairIterations) {
+      recommendedActions.push({
+        type: 'escalate_budget',
+        priority: 'urgent',
+        message: `Plan reached repair iteration limit (${plan.repairIterations}/${plan.maxRepairIterations}). Escalate to human review before proceeding.`
+      });
+    }
+
+    const readyTasks = tasks.filter(task =>
+      task.status === 'pending' && task.dependsOn.every(depId => state.tasks[depId]?.status === 'completed')
+    );
+    if (readyTasks.length > 0) {
+      const sortedReady = [...readyTasks].sort((a, b) => {
+        const countA = metrics.get(a.id)?.transitiveCount ?? 0;
+        const countB = metrics.get(b.id)?.transitiveCount ?? 0;
+        return countB - countA;
+      });
+      const topReady = sortedReady[0]!;
+      recommendedActions.push({
+        type: 'delegate_ready_tasks',
+        priority: 'high',
+        message: `${sortedReady.length} task(s) ready for delegation. Priority critical path task: "${topReady.title}".`,
+        targetTaskIds: sortedReady.map(t => t.id)
+      });
+    }
+
+    if (completedTasks === totalTasks && totalTasks > 0) {
+      recommendedActions.push({
+        type: 'evaluate_gate',
+        priority: 'high',
+        message: 'All plan execution tasks are completed. Evaluate quality gate via harness.evaluate_quality_gate.'
+      });
+    }
+
+    return {
+      planId,
+      totalTasks,
+      completedTasks,
+      inProgressTasks,
+      pendingTasks,
+      failedOrBlockedTasks,
+      completionPercentage,
+      criticalPath,
+      bottlenecks,
+      activeLocksCount,
+      lockContentionRisk,
+      recommendedActions
+    };
   }
 
   async claimTask(taskId: string, agentId: string, ownedPaths?: readonly string[]): Promise<TaskNode> {
