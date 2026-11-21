@@ -8,11 +8,11 @@ The MCP server persists and validates task state. It does not create LLM session
 
 1. Read `AGENTS.md`, the relevant project contracts, and repository context.
 2. Classify the request, affected domains, risk and required evidence.
-3. Create one execution plan through `harness.create_execution_plan`.
-4. Poll `harness.get_ready_tasks`; do not delegate tasks whose dependencies are incomplete.
+3. Create one execution plan through `craftrig.create_execution_plan`.
+4. Poll `craftrig.get_ready_tasks`; do not delegate tasks whose dependencies are incomplete.
 5. Claim each task before delegation.
 6. Build a task packet containing objective, scope, owner role, Skill IDs, module IDs, dependencies, allowed tools, acceptance criteria, prohibited actions, and evidence requirements.
-7. Spawn independent ready tasks using the host's native subagent runtime. Apply bounded concurrency from `HARNESS_MAX_PARALLEL_TASKS`.
+7. Spawn independent ready tasks using the host's native subagent runtime. Apply bounded concurrency from `CRAFTRIG_MAX_PARALLEL_TASKS`.
 8. Require each worker to return changed paths, decisions, test results, evidence IDs, risk and unresolved work.
 9. Integrate changes through an explicitly assigned integration owner. Do not allow concurrent agents to write the same files.
 10. Complete the task only after its evidence exists. Record failures and blocked reasons honestly.

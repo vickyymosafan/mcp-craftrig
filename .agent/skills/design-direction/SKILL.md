@@ -9,7 +9,7 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 ## Step 0: Design Brief Intake (user chooses first)
 Before writing any UI, let the user shape the result. Do not impose the house style below unless the user declines to choose.
 
-1. Read the menu from MCP resource `harness://design-options` (source: `catalogs/design-options.json`). It covers personality, theme mode, section polarity (`follow-active-theme`, `contrast-bands`, `always-dark-media-showcase`, `always-light-reading`), theme toggle control, light canvas tone, color family and harmony, accent usage, heading/body/mono fonts, type scale, weight, layout pattern, density, content width, navigation, corner radius, surface, icons, imagery, motion, background, accessibility target, responsive priority, copy tone and language.
+1. Read the menu from MCP resource `craftrig://design-options` (source: `catalogs/design-options.json`). It covers personality, theme mode, section polarity (`follow-active-theme`, `contrast-bands`, `always-dark-media-showcase`, `always-light-reading`), theme toggle control, light canvas tone, color family and harmony, accent usage, heading/body/mono fonts, type scale, weight, layout pattern, density, content width, navigation, corner radius, surface, icons, imagery, motion, background, accessibility target, responsive priority, copy tone and language.
 2. Ask the user using the host's native question UI (multiple choice). Group into at most 3 rounds:
    - Round 1 (identity & polarity): personality, themeMode, sectionPolarity, themeToggle, lightCanvasTone, colorFamily, colorHarmony, accentUsage.
    - Round 2 (type and layout): headingFont, bodyFont, monoFont, typeScale, layoutPattern, density, navigation.

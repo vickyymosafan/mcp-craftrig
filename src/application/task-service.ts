@@ -394,7 +394,7 @@ export class TaskService {
       recommendedActions.push({
         type: 'evaluate_gate',
         priority: 'high',
-        message: 'All plan execution tasks are completed. Evaluate quality gate via harness.evaluate_quality_gate.'
+        message: 'All plan execution tasks are completed. Evaluate quality gate via craftrig.evaluate_quality_gate.'
       });
     }
 

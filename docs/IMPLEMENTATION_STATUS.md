@@ -41,15 +41,15 @@
 2. Run `npx playwright install chromium`.
 3. Run `npm run check`.
 4. Configure the MCP host to launch `dist/src/index.js`.
-5. Set `HARNESS_WORKSPACE_ROOT` to the target application root.
-6. Verify the server appears in the MCP host and run `harness.list_modules` and `harness.list_skills`.
+5. Set `CRAFTRIG_WORKSPACE_ROOT` to the target application root.
+6. Verify the server appears in the MCP host and run `craftrig.list_modules` and `craftrig.list_skills`.
 7. Create a test plan, start the local dev server, then run responsive inspection against localhost.
 
 
 ## Follow-up patch: MCP optional input normalization
 
 - Added `src/interfaces/mcp/input-normalizers.ts` to translate Zod/MCP transport values into strict application/domain inputs by omitting undefined optional properties.
-- Updated `harness.create_execution_plan` to normalize `domains` and `maxRepairIterations` before calling `TaskService`.
+- Updated `craftrig.create_execution_plan` to normalize `domains` and `maxRepairIterations` before calling `TaskService`.
 - Updated `localhost.run_interaction_scenario` to normalize optional action `value` and `timeoutMs` before calling the browser port.
 - Added four regression tests covering absent and provided optional values.
 - Patch verification in the authoring environment: isolated TypeScript compilation with `strict` and `exactOptionalPropertyTypes` passed; 4 normalization tests passed; catalog validation passed. Full dependency-backed `npm run check` could not be rerun here because npm dependency installation timed out.

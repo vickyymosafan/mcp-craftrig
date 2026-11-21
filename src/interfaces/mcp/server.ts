@@ -81,17 +81,17 @@ function errorResult(error: unknown, recoveryHint?: string) {
   if (!hint && error instanceof Error) {
     if (error.name === 'ConflictError') {
       if (error.message.includes('dependencies are not complete')) {
-        hint = 'Use harness.get_ready_tasks to find tasks whose dependencies are already satisfied.';
+        hint = 'Use craftrig.get_ready_tasks to find tasks whose dependencies are already satisfied.';
       } else if (error.message.includes('File ownership conflict')) {
-        hint = 'Use harness.list_file_locks to inspect active locks, wait for the conflicting task, or claim disjoint subpaths.';
+        hint = 'Use craftrig.list_file_locks to inspect active locks, wait for the conflicting task, or claim disjoint subpaths.';
       } else if (error.message.includes('Repair budget exhausted')) {
         hint = 'Escalate to human review; do not continue automatic repair loops without authorization.';
       }
     } else if (error.name === 'NotFoundError') {
-      hint = 'Verify the UUID using harness.get_execution_plan or check the active plan ID.';
+      hint = 'Verify the UUID using craftrig.get_execution_plan or check the active plan ID.';
     } else if (error.name === 'ValidationError') {
       if (error.message.includes('requires at least one evidence')) {
-        hint = 'Record evidence first using harness.record_evidence before completing this task.';
+        hint = 'Record evidence first using craftrig.record_evidence before completing this task.';
       } else if (error.message.includes('A PASS checkpoint requires evidence')) {
         hint = 'Attach valid plan-scoped evidence IDs when marking a quality checkpoint as PASS.';
       }
@@ -124,7 +124,6 @@ export function createMcpServer(deps: Dependencies): McpServer {
     handler: (input: z.infer<T>, ctx?: unknown) => Promise<any>
   ) {
     (server.registerTool as any)(`craftrig.${name}`, config, handler);
-    (server.registerTool as any)(`harness.${name}`, config, handler);
   }
 
   registerToolWithAlias('start_blueprint_interview', {
@@ -641,7 +640,6 @@ export function createMcpServer(deps: Dependencies): McpServer {
 
   const registerResourceWithAlias = (name: string, pathSegment: string, meta: { title: string; description: string; mimeType: string }, handler: (uri: URL) => Promise<any>) => {
     server.registerResource(`${name}-craftrig`, `craftrig://${pathSegment}`, meta, handler);
-    server.registerResource(`${name}-harness`, `harness://${pathSegment}`, meta, handler);
   };
 
   const registerResourceTemplateWithAlias = (
@@ -653,12 +651,6 @@ export function createMcpServer(deps: Dependencies): McpServer {
     server.registerResource(
       `${name}-craftrig`,
       new ResourceTemplate(`craftrig://${templatePattern}`, { list: undefined }),
-      meta,
-      (uri, params) => handler(uri, params as Record<string, string>)
-    );
-    server.registerResource(
-      `${name}-harness`,
-      new ResourceTemplate(`harness://${templatePattern}`, { list: undefined }),
       meta,
       (uri, params) => handler(uri, params as Record<string, string>)
     );

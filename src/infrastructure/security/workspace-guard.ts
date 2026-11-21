@@ -33,7 +33,7 @@ export class WorkspaceGuard {
     return resolved;
   }
 
-  async ensureEvidenceDirectory(relativeDirectory = '.harness/evidence'): Promise<string> {
+  async ensureEvidenceDirectory(relativeDirectory = '.craftrig/evidence'): Promise<string> {
     const resolved = this.resolveInsideWorkspace(relativeDirectory);
     const realRoot = await realpath(this.root);
 

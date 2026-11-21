@@ -389,11 +389,11 @@ test('MCP server wires Blueprint Architect, ingest_blueprint, autopilot_next, ar
       'craftrig.autopilot_next',
       'craftrig.autopilot_resume',
       'craftrig.archive_plan',
-      'craftrig.storage_maintenance',
-      'harness.autopilot_next'
+      'craftrig.storage_maintenance'
     ]) {
       assert.ok(tools[name], `Tool ${name} must be registered`);
     }
+    assert.equal(tools['harness.autopilot_next'], undefined, 'Legacy harness.* alias must not be registered');
 
     const prompts = (server as any)._registeredPrompts;
     assert.ok(prompts['craftrig-autopilot'], 'Prompt craftrig-autopilot must be registered');

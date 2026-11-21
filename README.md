@@ -46,7 +46,7 @@ flowchart TD
 2. **Deterministic File Ownership & Lock Recovery**:
    - Exclusive path-level write locks prevent parallel agents from corrupting the same source files.
    - Automatic recovery of stale or orphaned locks held by completed or abandoned tasks.
-3. **Plan Intelligence Dashboard (`harness.get_plan_insights`)**:
+3. **Plan Intelligence Dashboard (`craftrig.get_plan_insights`)**:
    - Delivers real-time panoramic health metrics, remaining critical path chains, active bottlenecks, and prioritized next actions.
 4. **Pragmatic Implementation Ladder (Lazy Senior Dev Principle)**:
    - Enforces YAGNI, reuse of existing models, platform standard primitives, and minimal surface area to eliminate code slop and drastically reduce token usage.
@@ -123,15 +123,24 @@ claude mcp add craftrig -- node d:/craftrig/dist/src/index.js
 
 | Tool Name | Scope | Description |
 | :--- | :--- | :--- |
-| `harness.create_execution_plan` | Planning | Generates a persistent task DAG with workstreams, domain roles, and checkpoints. |
-| `harness.get_plan_insights` | Intelligence | Panoramic overview of critical path, bottlenecks, lock risk, and recommended actions. |
-| `harness.get_ready_tasks` | Scheduling | Returns pending tasks whose dependencies are satisfied, sorted by downstream impact. |
-| `harness.claim_task` | Concurrency | Claims a ready task for an agent and acquires exclusive path-level write locks. |
-| `harness.acquire_file_locks` | Concurrency | Locks additional workspace-relative paths for an in-progress task. |
-| `harness.release_file_locks` | Concurrency | Releases acquired file locks upon task completion or step handover. |
-| `harness.recover_stale_locks` | Recovery | Reclaims orphaned locks left by completed, failed, or timed-out tasks. |
-| `harness.record_evidence` | Verification | Records auditable evidence (test reports, screenshots, build logs). |
-| `harness.evaluate_quality_gate` | Quality Gate | Assesses all required acceptance criteria checkpoints before release. |
+| `craftrig.start_blueprint_interview` | Blueprint Architect | Adaptive deep requirements interview with repo pre-fill, recommended defaults, and elicitation schema. |
+| `craftrig.answer_blueprint_questions` | Blueprint Architect | Submits answers, runs Blueprint Linter, and compiles `blueprint.md` + `blueprint.json` with `REQ-ID`s. |
+| `craftrig.ingest_blueprint` | Autopilot | Compiles all blueprint phases into a multi-phase DAG with token-saving skill routing. |
+| `craftrig.autopilot_next` | Autopilot | Advances the autopilot loop: zero-token deterministic checks, parallel subagent wave manifests, and targeted repair. |
+| `craftrig.autopilot_resume` | Autopilot | Recovers expired leases/locks after crash and resumes the active wave. |
+| `craftrig.create_execution_plan` | Planning | Generates a persistent task DAG with workstreams, domain roles, and checkpoints. |
+| `craftrig.get_plan_insights` | Intelligence | Panoramic overview of critical path, bottlenecks, lock risk, and recommended actions. |
+| `craftrig.get_ready_tasks` | Scheduling | Returns pending tasks whose dependencies are satisfied, sorted by downstream impact. |
+| `craftrig.claim_task` | Concurrency | Claims a ready task for an agent and acquires exclusive path-level write locks. |
+| `craftrig.claim_ready_batch` | Concurrency | Atomically claims multiple ready tasks simultaneously for parallel subagents. |
+| `craftrig.heartbeat_task` | Concurrency | Extends the lease expiration of a long-running in-progress task. |
+| `craftrig.acquire_file_locks` | Concurrency | Locks additional workspace-relative paths for an in-progress task. |
+| `craftrig.release_file_locks` | Concurrency | Releases acquired file locks upon task completion or step handover. |
+| `craftrig.recover_stale_locks` | Recovery | Reclaims orphaned locks left by completed, failed, or timed-out tasks. |
+| `craftrig.record_evidence` | Verification | Records auditable evidence (test reports, screenshots, build logs). |
+| `craftrig.evaluate_quality_gate` | Quality Gate | Assesses all required acceptance criteria checkpoints before release. |
+| `craftrig.archive_plan` | Lean Storage | Brotli-compresses completed plans to `.craftrig/archive/<planId>.json.br` and runs incremental vacuum. |
+| `craftrig.storage_maintenance` | Lean Storage | Reports storage stats, compacts SQLite WAL, and enforces the 50 MB LRU evidence quota. |
 | `localhost.start_dev_server` | Runtime | Starts and monitors local development servers. |
 | `localhost.inspect_responsive` | Browser QA | Runs Playwright batch responsive scan across 13 viewport profiles. |
 | `localhost.audit_visual_a11y` | Visual & A11y QA | Runs dual-theme (`light`/`dark`) `@axe-core/playwright`, composited contrast, polarity, typography, occlusion, target-size, reduced-motion, and `ariaSnapshot` audit. |

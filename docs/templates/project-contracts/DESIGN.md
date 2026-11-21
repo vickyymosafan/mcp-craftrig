@@ -13,7 +13,7 @@
 - Iconography and illustration rules: TBD
 
 ## User choices
-Recorded from the design menu (`harness://design-options`). Unanswered items use the menu default.
+Recorded from the design menu (`craftrig://design-options`). Unanswered items use the menu default.
 - Personality / theme mode: TBD
 - Section polarity / theme toggle / light canvas tone: TBD
 - Color family / harmony / accent usage: TBD

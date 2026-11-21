@@ -33,7 +33,7 @@ test('generated checklist includes execution tasks, checkpoint states and eviden
       kind: 'test-report',
       title: 'Discovery acceptance report',
       description: 'Acceptance criteria and repository map were reviewed.',
-      path: '.harness/evidence/discovery.json',
+      path: '.craftrig/evidence/discovery.json',
       uri: null,
       metadata: {},
       createdBy: 'discovery-agent'

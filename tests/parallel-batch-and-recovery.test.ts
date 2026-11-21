@@ -212,7 +212,7 @@ test('MCP server exposes claim_ready_batch, heartbeat_task, and resource templat
 
     const registeredTools = (server as any)._registeredTools;
     assert.ok(registeredTools['craftrig.claim_ready_batch'], 'craftrig.claim_ready_batch must be registered');
-    assert.ok(registeredTools['harness.claim_ready_batch'], 'harness.claim_ready_batch must be registered');
+    assert.equal(registeredTools['harness.claim_ready_batch'], undefined, 'Legacy harness.* duplicate tools must not be registered');
     assert.ok(registeredTools['craftrig.heartbeat_task'], 'craftrig.heartbeat_task must be registered');
     assert.ok(registeredTools['localhost.ensure_dev_server'], 'localhost.ensure_dev_server must be registered');
 

@@ -13,5 +13,5 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 5. Confirm readiness before browser navigation.
 6. Use only localhost/loopback URLs. Never follow a redirect to an external origin.
 7. Do not expose secrets in logs or screenshots.
-8. Stop only processes started by the harness.
+8. Stop only processes started by Craftrig.
 9. If the browser runs in another container, validate the network path; `localhost` inside a browser container may refer to that container rather than the development host.

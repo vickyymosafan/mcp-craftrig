@@ -91,7 +91,7 @@ Evidence records capture plan/task, kind, title, description, relative path or U
 
 ## 7. Development rules and project contracts
 
-`docs/PRINCIPAL_DEVELOPMENT.md` is the engineering policy source. Project-specific contracts can be initialized from `docs/templates/project-contracts/`; only applicable templates should be copied and completed. The MCP server exposes the rulebook as the read-only resource `harness://development-principles`.
+`docs/PRINCIPAL_DEVELOPMENT.md` is the engineering policy source. Project-specific contracts can be initialized from `docs/templates/project-contracts/`; only applicable templates should be copied and completed. The MCP server exposes the rulebook as the read-only resource `craftrig://development-principles`.
 
 ## 8. Extensibility
 

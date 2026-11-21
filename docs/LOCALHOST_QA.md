@@ -23,7 +23,7 @@ Inspect the website that has actually been built, interact with it in a browser,
 6. Rerun impacted routes and viewport profiles.
 7. Review new screenshots and logs independently.
 8. Record evidence and update the checkpoint.
-9. If a later change can affect the dimension, invalidate and rerun it. The harness regenerates `.harness/checklists/<planId>.md` after checkpoint updates.
+9. If a later change can affect the dimension, invalidate and rerun it. Craftrig regenerates `.craftrig/checklists/<planId>.md` after checkpoint updates.
 
 ## Dimension queue
 
@@ -44,7 +44,7 @@ Security, privacy, and baseline accessibility controls remain active throughout 
 
 Each browser report must include timestamp, run ID, base URL, route, viewport, final URL, document width, viewport width, overflow, out-of-bounds elements, console errors, page errors, failed requests, HTTP errors, screenshot path and overall result.
 
-Store reports under `.harness/evidence/`. Do not commit sensitive screenshots or logs. Review them for secrets and personal data before sharing.
+Store reports under `.craftrig/evidence/`. Do not commit sensitive screenshots or logs. Review them for secrets and personal data before sharing.
 
 ## What PASS means
 
