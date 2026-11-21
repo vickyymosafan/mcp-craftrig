@@ -16,8 +16,28 @@ import type {
   VisualA11yCaseResult
 } from '../../domain/ports.js';
 import { assertLocalhostUrl } from '../security/workspace-guard.js';
+import { computeMetricsHash, saveContentAddressedBlob } from '../persistence/evidence-store.js';
 import { evaluateDomVisualA11y, extractAxeFindings } from './visual-a11y-evaluator.js';
 import { auditWebGLCanvases, installWebGLTracker, WEBGL_SHADER_WARNING_PATTERN } from './webgl-audit.js';
+
+async function captureLeanScreenshot(
+  page: { screenshot(options: { type: 'jpeg'; quality: number; fullPage: boolean; animations?: 'disabled' | 'allow' }): Promise<Buffer> },
+  evidenceDirectory: string,
+  disableAnimations = true
+): Promise<{ path: string; bytes: number } | null> {
+  try {
+    const buffer = await page.screenshot({
+      type: 'jpeg',
+      quality: 70,
+      fullPage: true,
+      ...(disableAnimations ? { animations: 'disabled' as const } : {})
+    });
+    const saved = await saveContentAddressedBlob(evidenceDirectory, buffer, '.jpg');
+    return { path: saved.path, bytes: saved.bytes };
+  } catch {
+    return null;
+  }
+}
 
 const DEFAULT_VISUAL_A11Y_VIEWPORTS: ViewportProfile[] = [
   { name: 'laptop-1280', width: 1280, height: 800, isMobile: false, hasTouch: false, deviceScaleFactor: 1 },
@@ -271,8 +291,9 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           } catch { await routeRequest.abort('blockedbyclient'); }
         });
         const caseDirectory = path.join(evidenceDirectory, runId, slug(route), viewport.name);
-        await mkdir(caseDirectory, { recursive: true });
-        const screenshotPath = path.join(caseDirectory, 'full-page.png');
+        const captureMode = input.captureScreenshots ?? 'failures-only';
+        let screenshotPath: string | null = null;
+        let screenshotBytes = 0;
         let metrics = {
           documentWidth: viewport.width,
           viewportWidth: viewport.width,
@@ -376,12 +397,17 @@ export class PlaywrightInspector implements BrowserInspectorPort {
 
           const webglAudit = await auditWebGLCanvases(page, shaderWarnings);
           for (const webglIssue of webglAudit.issues) issues.push(webglIssue);
-          await page.screenshot({ path: screenshotPath, fullPage: true, animations: 'disabled' });
+          if (issues.length > 0 || captureMode === 'all') {
+            const shot = await captureLeanScreenshot(page, evidenceDirectory, true);
+            if (shot) { screenshotPath = shot.path; screenshotBytes = shot.bytes; }
+          }
         } catch (error) {
           issues.push(error instanceof Error ? error.message : String(error));
-          await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+          const shot = await captureLeanScreenshot(page, evidenceDirectory, false);
+          if (shot) { screenshotPath = shot.path; screenshotBytes = shot.bytes; }
         } finally {
           if (issues.length > 0) {
+            await mkdir(caseDirectory, { recursive: true });
             tracePath = path.join(caseDirectory, 'trace.zip');
             await context.tracing.stop({ path: tracePath }).catch(() => {});
           } else {
@@ -391,6 +417,15 @@ export class PlaywrightInspector implements BrowserInspectorPort {
         }
         const finalUrl = page.url();
         const passed = issues.length === 0;
+        const metricsHash = computeMetricsHash({
+          route,
+          viewport: viewport.name,
+          documentWidth: metrics.documentWidth,
+          viewportWidth: metrics.viewportWidth,
+          horizontalOverflow: metrics.horizontalOverflow,
+          passed,
+          issues
+        });
         return {
           route,
           viewport,
@@ -405,6 +440,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           failedRequests,
           httpErrors,
           screenshotPath,
+          screenshotBytes,
+          metricsHash,
           tracePath,
           cdpMetrics,
           passed,
@@ -437,7 +474,9 @@ export class PlaywrightInspector implements BrowserInspectorPort {
     const steps: InteractionScenarioReport['steps'] = [];
     const directory = path.join(path.resolve(input.evidenceDirectory), runId);
     await mkdir(directory, { recursive: true });
-    const screenshotPath = path.join(directory, 'interaction.png');
+    const captureMode = input.captureScreenshots ?? 'failures-only';
+    let screenshotPath: string | null = null;
+    let screenshotBytes = 0;
     const consoleErrors: string[] = [];
     const pageErrors: string[] = [];
     const failedRequests: string[] = [];
@@ -487,7 +526,11 @@ export class PlaywrightInspector implements BrowserInspectorPort {
             steps.push({ action: action.action, selector: action.selector, status: 'fail', error: error instanceof Error ? error.message : String(error) });
           }
         }
-        await page.screenshot({ path: screenshotPath, fullPage: true });
+        const hasStepFailure = steps.some(step => step.status !== 'pass') || consoleErrors.length > 0 || pageErrors.length > 0;
+        if (hasStepFailure || captureMode === 'all') {
+          const shot = await captureLeanScreenshot(page, path.resolve(input.evidenceDirectory), false);
+          if (shot) { screenshotPath = shot.path; screenshotBytes = shot.bytes; }
+        }
       } finally {
         await context.close();
       }
@@ -495,7 +538,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
       const localHttpErrors = httpErrors.filter(item => new URL(item.url).origin === base.origin);
       const localFailedRequests = failedRequests.filter(value => { try { return new URL(value.match(/https?:\/\/\S+/)?.[0] ?? '').origin === base.origin; } catch { return false; } });
       const passed = steps.every(step => step.status === 'pass') && consoleErrors.length === 0 && pageErrors.length === 0 && localHttpErrors.length === 0 && localFailedRequests.length === 0;
-      const report: InteractionScenarioReport = { runId, route, passed, startedAt, finishedAt, steps, consoleErrors, pageErrors, failedRequests, httpErrors, screenshotPath, reportPath: path.join(directory, 'interaction-report.json') };
+      const metricsHash = computeMetricsHash({ route, passed, steps });
+      const report: InteractionScenarioReport = { runId, route, passed, startedAt, finishedAt, steps, consoleErrors, pageErrors, failedRequests, httpErrors, screenshotPath, screenshotBytes, metricsHash, reportPath: path.join(directory, 'interaction-report.json') };
       await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
       return report;
     });
@@ -567,7 +611,9 @@ export class PlaywrightInspector implements BrowserInspectorPort {
 
         const caseDirectory = path.join(evidenceDirectory, runId, slug(route), colorScheme, viewport.name);
         await mkdir(caseDirectory, { recursive: true });
-        const screenshotPath = path.join(caseDirectory, `${colorScheme}.png`);
+        const captureMode = input.captureScreenshots ?? 'failures-only';
+        let screenshotPath: string | null = null;
+        let screenshotBytes = 0;
         const ariaSnapshotPath = path.join(caseDirectory, 'aria-snapshot.yml');
 
         const issues: string[] = [];
@@ -635,8 +681,6 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           const ariaYaml = await page.locator('body').ariaSnapshot({ mode: 'ai', boxes: true }).catch(() => '');
           await writeFile(ariaSnapshotPath, ariaYaml || '# ariaSnapshot unavailable', 'utf8');
 
-          await page.screenshot({ path: screenshotPath, fullPage: true, animations: 'disabled' });
-
           if (input.testReducedMotion) {
             await page.emulateMedia({ reducedMotion: 'reduce' });
             await page.waitForTimeout(100);
@@ -668,9 +712,18 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           if (reducedMotionHiddenCount > 0) issues.push(`[${colorScheme}] ${reducedMotionHiddenCount} primary section/heading(s) remained hidden under prefers-reduced-motion: reduce.`);
           if (consoleErrors.length > 0) issues.push(`[${colorScheme}] ${consoleErrors.length} console error(s).`);
           if (pageErrors.length > 0) issues.push(`[${colorScheme}] ${pageErrors.length} uncaught page error(s).`);
+
+          if (issues.length > 0 || captureMode === 'all') {
+            if (input.testReducedMotion) {
+              await page.emulateMedia({ reducedMotion: 'no-preference' }).catch(() => undefined);
+            }
+            const shot = await captureLeanScreenshot(page, evidenceDirectory, true);
+            if (shot) { screenshotPath = shot.path; screenshotBytes = shot.bytes; }
+          }
         } catch (error) {
           issues.push(error instanceof Error ? error.message : String(error));
-          await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+          const shot = await captureLeanScreenshot(page, evidenceDirectory, false);
+          if (shot) { screenshotPath = shot.path; screenshotBytes = shot.bytes; }
           await writeFile(ariaSnapshotPath, '# ariaSnapshot skipped due to error', 'utf8').catch(() => undefined);
         } finally {
           if (issues.length > 0) {
@@ -683,6 +736,19 @@ export class PlaywrightInspector implements BrowserInspectorPort {
         }
 
         const passed = issues.length === 0;
+        const metricsHash = computeMetricsHash({
+          route,
+          colorScheme,
+          viewport: viewport.name,
+          axeViolations: axeViolations.length,
+          contrastIssues: contrastIssues.length,
+          typographyIssues: typographyIssues.length,
+          targetSizeIssues: targetSizeIssues.length,
+          occlusionIssues: occlusionIssues.length,
+          polarityIssues: polarityIssues.length,
+          reducedMotionHiddenCount,
+          passed
+        });
         return {
           route,
           colorScheme,
@@ -700,6 +766,8 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           clsScore,
           ariaSnapshotPath,
           screenshotPath,
+          screenshotBytes,
+          metricsHash,
           tracePath,
           cdpMetrics,
           consoleErrors,

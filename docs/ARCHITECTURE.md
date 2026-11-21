@@ -47,9 +47,25 @@ Tasks are persisted with UUIDs, explicit dependencies, owner role, Skill IDs, mo
 - Long-running agents keep their claims active using `heartbeat_task`.
 - Additional paths can be acquired or inspected mid-task with `acquire_file_locks`, `release_file_locks`, and `list_file_locks`; active locks and leases are released automatically when a task completes, fails, blocks, or reopens.
 
-State persistence supports both atomic JSON file swapping and high-performance transactional SQLite in WAL mode (`PRAGMA journal_mode = WAL`) using Node 22's native `node:sqlite` engine (`SqliteStateRepository`), eliminating multi-process race conditions.
+State persistence uses an adaptive backend (`CRAFTRIG_STATE_BACKEND=auto|sqlite|json`, wired in `src/index.ts`). In `auto` mode, multi-agent concurrency selects **Lean SQLite** (`SqliteStateRepository` on Node 22 native `node:sqlite`) with normalized per-entity tables (`plans`, `tasks`, `checkpoints`, `evidence`, `file_locks`, `server_processes`, `blueprints`, `interviews`), diff-based row writes, a 512 KB page cache cap (`PRAGMA cache_size = -512`), bounded WAL (`PRAGMA journal_size_limit = 1048576`), incremental vacuum, and **idle auto-close** (default 30s) that runs `PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;` and closes the native handle so idle SQLite RAM drops to zero.
 
-## 5. QA loop and parallel QA wave
+## 5. Blueprint Architect, Autopilot loop, and Lean Evidence
+
+### Blueprint Architect & Multi-Phase Autopilot
+1. When the user does not have a blueprint, `craftrig.start_blueprint_interview` (default `mode: "deep"`) scans the workspace via `WorkspaceRepoScanner` to pre-fill detectable stack/routes, asks 2–4 adaptive questions per round (with recommended defaults and MCP elicitation schema), runs the Blueprint Linter for contradictions/unmeasurable criteria, and writes `blueprint.md` + `blueprint.json` with `REQ-001..N` IDs.
+2. `craftrig.ingest_blueprint` compiles ALL blueprint phases into a Multi-Phase DAG using `SkillRouter` and `EffortScaler`: irrelevant skills are skipped and recorded in `telemetry.skillsSkipped`; each task receives 1 primary skill (Tier-1 progressive disclosure path only) and an explicit `executionMode` (`tool`, `inline`, or `subagent`) plus `modelTier` (`deep`, `standard`, `fast`).
+3. `craftrig.autopilot_next` drives end-to-end execution across every phase until `state === "done"`:
+   - Runs zero-token deterministic checks (`localhost.inspect_responsive`, `localhost.audit_visual_a11y`, typecheck/build) BEFORE spawning QA subagents.
+   - On failure, spawns a single targeted 1-skill repair task (`state === "repair"`) carrying only failed evidence.
+   - Passes structured `handoff` contracts between upstream and downstream tasks inside token-budgeted `task-packet` resources (`craftrig://plans/{planId}/tasks/{taskId}/packet`).
+   - Supports `autopilot_resume` after crash/restart and emits MCP `notifications/progress`.
+
+### Lean Evidence Diet (50 MB Default Workspace Quota)
+- Browser inspections default to `captureScreenshots: "failures-only"`: passing viewports record DOM metrics + SHA-256 `metricsHash` with zero image bytes; failing cases capture JPEG (quality 70) stored in content-addressed SHA-256 blobs (`blobs/<sha256>.jpg`) to deduplicate reruns.
+- LRU quota enforcement (`CRAFTRIG_EVIDENCE_QUOTA_MB`, default 50 MB) evicts oldest unreferenced artifacts while protecting active/PASS checkpoint evidence.
+- `craftrig.archive_plan` Brotli-compresses completed plans to `.craftrig/archive/<planId>.json.br`, purges active DB tables, and runs `PRAGMA incremental_vacuum`.
+
+## 6. QA loop and parallel QA wave
 
 For UI work:
 1. Frontend and styling tasks execute, converging on an `integrate-and-build` milestone task.

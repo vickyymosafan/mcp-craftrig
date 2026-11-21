@@ -1,7 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { EMPTY_STATE, type HarnessState } from '../../domain/models.js';
-import type { StateRepository } from '../../domain/ports.js';
+import type { StateRepository, StorageStats } from '../../domain/ports.js';
 
 class AsyncMutex {
   private tail: Promise<void> = Promise.resolve();
@@ -47,11 +47,33 @@ export class JsonStateRepository implements StateRepository {
         ...structuredClone(EMPTY_STATE),
         ...parsed,
         tasks,
-        fileLocks: parsed.fileLocks ?? {}
+        fileLocks: parsed.fileLocks ?? {},
+        blueprints: parsed.blueprints ?? {},
+        interviews: parsed.interviews ?? {}
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return structuredClone(EMPTY_STATE);
       throw error;
     }
+  }
+
+  async getStorageStats(): Promise<StorageStats> {
+    const state = await this.read();
+    const dbBytes = await stat(this.stateFile).then(s => s.size).catch(() => 0);
+    return {
+      backend: 'json',
+      dbBytes,
+      walBytes: 0,
+      isOpen: false,
+      counts: {
+        plans: Object.keys(state.plans).length,
+        tasks: Object.keys(state.tasks).length,
+        checkpoints: Object.keys(state.checkpoints).length,
+        evidence: Object.keys(state.evidence).length,
+        fileLocks: Object.keys(state.fileLocks ?? {}).length,
+        blueprints: Object.keys(state.blueprints ?? {}).length,
+        interviews: Object.keys(state.interviews ?? {}).length
+      }
+    };
   }
 }

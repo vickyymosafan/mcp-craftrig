@@ -1,6 +1,8 @@
+import type { StartInterviewInput } from '../../application/blueprint-architect.js';
 import type { CreatePlanInput } from '../../application/task-planner.js';
 import type { ListFileLocksFilter } from '../../application/task-service.js';
-import type { ColorSchemeMode, InteractionAction, SectionPolarityMode, ViewportProfile, VisualA11yAuditInput } from '../../domain/ports.js';
+import type { AutonomyMode, BlueprintPresetId, InterviewMode } from '../../domain/blueprint.js';
+import type { ColorSchemeMode, InteractionAction, ScreenshotCaptureMode, SectionPolarityMode, ViewportProfile, VisualA11yAuditInput } from '../../domain/ports.js';
 import type { WorkDomain } from '../../domain/models.js';
 
 /**
@@ -130,6 +132,7 @@ export interface VisualA11yToolInput {
   testReducedMotion: boolean;
   evidenceDirectory: string;
   timeoutMs: number;
+  captureScreenshots?: ScreenshotCaptureMode | undefined;
 }
 
 /** Normalize optional visual/a11y audit fields before crossing into BrowserInspectorPort. */
@@ -145,8 +148,73 @@ export function toVisualA11yAuditInput(input: VisualA11yToolInput): VisualA11yAu
     ...(input.themeToggleSelector !== undefined
       ? { themeToggleSelector: input.themeToggleSelector }
       : {}),
+    ...(input.captureScreenshots !== undefined
+      ? { captureScreenshots: input.captureScreenshots }
+      : {}),
     testReducedMotion: input.testReducedMotion,
     evidenceDirectory: input.evidenceDirectory,
     timeoutMs: input.timeoutMs
+  };
+}
+
+export function toStartInterviewInput(input: {
+  initialIdea: string;
+  title?: string | undefined;
+  mode?: InterviewMode | undefined;
+  preset?: BlueprintPresetId | undefined;
+}): StartInterviewInput {
+  return {
+    initialIdea: input.initialIdea,
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.preset !== undefined ? { preset: input.preset } : {})
+  };
+}
+
+export function toAnswerInterviewInput(input: {
+  sessionId: string;
+  answers: Record<string, string | string[]>;
+  skipWithDefaults?: string[] | undefined;
+  finalizeNow?: boolean | undefined;
+}): {
+  sessionId: string;
+  answers: Record<string, string | string[]>;
+  skipWithDefaults?: string[];
+  finalizeNow?: boolean;
+} {
+  return {
+    sessionId: input.sessionId,
+    answers: input.answers,
+    ...(input.skipWithDefaults !== undefined ? { skipWithDefaults: input.skipWithDefaults } : {}),
+    ...(input.finalizeNow !== undefined ? { finalizeNow: input.finalizeNow } : {})
+  };
+}
+
+export function toAutopilotNextOptions(input: {
+  approvePhaseId?: string | undefined;
+  maxWaveSize?: number | undefined;
+}): { approvePhaseId?: string; maxWaveSize?: number } {
+  return {
+    ...(input.approvePhaseId !== undefined ? { approvePhaseId: input.approvePhaseId } : {}),
+    ...(input.maxWaveSize !== undefined ? { maxWaveSize: input.maxWaveSize } : {})
+  };
+}
+
+export function toIngestBlueprintOptions(input: {
+  autonomyMode?: AutonomyMode | undefined;
+  maxRepairIterations?: number | undefined;
+  maxSubagentsPerWave?: number | undefined;
+  tokenBudget?: number | null | undefined;
+}): {
+  autonomyMode?: AutonomyMode;
+  maxRepairIterations?: number;
+  maxSubagentsPerWave?: number;
+  tokenBudget?: number | null;
+} {
+  return {
+    ...(input.autonomyMode !== undefined ? { autonomyMode: input.autonomyMode } : {}),
+    ...(input.maxRepairIterations !== undefined ? { maxRepairIterations: input.maxRepairIterations } : {}),
+    ...(input.maxSubagentsPerWave !== undefined ? { maxSubagentsPerWave: input.maxSubagentsPerWave } : {}),
+    ...(input.tokenBudget !== undefined ? { tokenBudget: input.tokenBudget } : {})
   };
 }

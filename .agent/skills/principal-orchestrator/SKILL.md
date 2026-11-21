@@ -9,7 +9,18 @@ compatibility: Works with Agent Skills-compatible hosts. Host-native subagent ex
 ## Mission
 Own the task graph and final synthesis. Do not implement every workstream yourself when host-native subagents are available.
 
-## Mandatory workflow
+## Blueprint Autopilot workflow (preferred for full projects)
+1. **No blueprint yet?** Call `craftrig.start_blueprint_interview` (default `mode: "deep"`). It scans the repository first to pre-fill detectable stack/routes, then returns 2–4 adaptive questions per round with recommended defaults. Relay `questions[]` to the user via host UI, submit answers via `craftrig.answer_blueprint_questions`, resolve any Blueprint Linter contradictions, and get quick approval on the generated `blueprint.md`.
+2. **Blueprint ready?** Call `craftrig.ingest_blueprint` (using `blueprintId` or `markdown`) to compile ALL phases into a token-efficient Multi-Phase DAG. Unneeded skills (e.g. `threejs-shaders`, `backend-implementation`, `motion-animation`) are explicitly skipped to save tokens.
+3. **Run the `craftrig.autopilot_next` loop until `state === "done"` or `"needs_human"`**:
+   - `state === "verify"`: Run `deterministicChecks` directly with MCP/CLI tools (0 subagent LLM tokens). Only spawn a targeted 1-skill repair subagent if a check fails.
+   - `state === "dispatch"` or `"repair"`: Claim `dispatchWave` via `craftrig.claim_ready_batch` and spawn parallel host subagents ONLY for `mode === "subagent"` tasks. Each subagent reads ONLY its compact `packetUri` and its single `primarySkill` file — never load skipped skills.
+   - Pass structured `handoff` (`summary`, `changedFiles`, `contracts`, `decisions`, `testsRun`) to `craftrig.complete_task` so downstream phases receive compact contracts instead of raw transcripts.
+   - Do NOT stop after landing page or Phase 1 — complete every phase through final quality gate and REQ-ID traceability verification.
+4. On crash or restart, call `craftrig.autopilot_resume` to recover expired leases and continue from the exact active wave.
+5. After completion, optionally call `craftrig.archive_plan` to Brotli-compress state and run storage maintenance. Never deploy without explicit user authorization.
+
+## Legacy single-request workflow
 1. Read `AGENTS.md`, `docs/PRINCIPAL_DEVELOPMENT.md`, `docs/ARCHITECTURE.md`, and the relevant project contracts before planning.
 2. Inspect the repository and identify its source of truth. Do not assume framework, commands, folder structure, or test strategy.
 3. Create an execution plan with `harness.create_execution_plan`.

@@ -1,3 +1,13 @@
+import type {
+  AutonomyMode,
+  ExecutionMode,
+  InterviewSession,
+  ModelTier,
+  PlanTelemetry,
+  ProjectBlueprint,
+  TaskHandoff
+} from './blueprint.js';
+
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'failed' | 'cancelled';
 export type CheckpointStatus = 'pending' | 'pass' | 'fail' | 'blocked' | 'not_applicable';
 export type EvidenceKind = 'browser-report' | 'screenshot' | 'test-report' | 'build-log' | 'security-report' | 'manual-review' | 'other';
@@ -36,6 +46,15 @@ export interface TaskNode {
   leaseExpiresAt?: string | null;
   leaseTimeoutMs?: number | null;
   attemptCount?: number;
+  phaseId?: string | null;
+  phaseName?: string | null;
+  phaseOrder?: number | null;
+  requirementIds?: string[];
+  executionMode?: ExecutionMode;
+  modelTier?: ModelTier;
+  primarySkill?: string | null;
+  handoff?: TaskHandoff | null;
+  estimatedPacketTokens?: number;
 }
 
 export interface BatchClaimItem {
@@ -61,6 +80,14 @@ export interface QualityCheckpoint {
   updatedAt: string;
 }
 
+export interface ExecutionPlanPhaseSummary {
+  id: string;
+  order: number;
+  name: string;
+  taskIds: string[];
+  requirementIds: string[];
+}
+
 export interface ExecutionPlan {
   id: string;
   title: string;
@@ -72,6 +99,13 @@ export interface ExecutionPlan {
   repairIterations: number;
   createdAt: string;
   updatedAt: string;
+  blueprintId?: string | null;
+  autonomyMode?: AutonomyMode;
+  phases?: ExecutionPlanPhaseSummary[];
+  approvedPhaseIds?: string[];
+  tokenBudget?: number | null;
+  maxSubagentsPerWave?: number;
+  telemetry?: PlanTelemetry;
 }
 
 export interface EvidenceRecord {
@@ -108,11 +142,13 @@ export interface HarnessState {
   evidence: Record<string, EvidenceRecord>;
   fileLocks: Record<string, FileLockRecord>;
   serverProcesses: Record<string, ServerProcessRecord>;
+  blueprints?: Record<string, ProjectBlueprint>;
+  interviews?: Record<string, InterviewSession>;
 }
 
 export const EMPTY_STATE: HarnessState = {
   schemaVersion: 1,
-  plans: {}, tasks: {}, checkpoints: {}, evidence: {}, fileLocks: {}, serverProcesses: {}
+  plans: {}, tasks: {}, checkpoints: {}, evidence: {}, fileLocks: {}, serverProcesses: {}, blueprints: {}, interviews: {}
 };
 
 export const QUALITY_DIMENSIONS = [

@@ -1,9 +1,39 @@
+import type { DetectedRepoContext, ProjectBlueprint } from './blueprint.js';
 import type { HarnessState } from './models.js';
+
+export interface StorageStats {
+  backend: 'json' | 'sqlite';
+  dbBytes: number;
+  walBytes: number;
+  isOpen: boolean;
+  counts: {
+    plans: number;
+    tasks: number;
+    checkpoints: number;
+    evidence: number;
+    fileLocks: number;
+    blueprints: number;
+    interviews: number;
+  };
+}
 
 export interface StateRepository {
   read(): Promise<HarnessState>;
   transact<T>(operation: (state: HarnessState) => T | Promise<T>): Promise<T>;
+  close?(): void;
+  vacuumIncremental?(pages?: number): Promise<void>;
+  getStorageStats?(): Promise<StorageStats>;
 }
+
+export interface RepoScannerPort {
+  scan(): Promise<DetectedRepoContext>;
+}
+
+export interface BlueprintArtifactWriterPort {
+  write(blueprint: ProjectBlueprint, markdown: string): Promise<{ markdownPath: string; jsonPath: string }>;
+}
+
+export type ScreenshotCaptureMode = 'failures-only' | 'all';
 
 export interface BrowserInspectorPort {
   discoverRoutes(baseUrl: string, timeoutMs: number): Promise<{ baseUrl: string; routes: string[]; discoveredAt: string }>;
@@ -30,6 +60,7 @@ export interface VisualA11yAuditInput {
   testReducedMotion: boolean;
   evidenceDirectory: string;
   timeoutMs: number;
+  captureScreenshots?: ScreenshotCaptureMode;
 }
 
 export interface AxeViolationSummary {
@@ -104,7 +135,9 @@ export interface VisualA11yCaseResult {
   fontErrors: string[];
   clsScore: number | null;
   ariaSnapshotPath: string;
-  screenshotPath: string;
+  screenshotPath: string | null;
+  screenshotBytes?: number | undefined;
+  metricsHash?: string | undefined;
   tracePath?: string | null | undefined;
   cdpMetrics?: {
     jsHeapUsedSize?: number | undefined;
@@ -153,6 +186,7 @@ export interface ResponsiveInspectionInput {
   evidenceDirectory: string;
   timeoutMs: number;
   allowedOverflowSelectors: string[];
+  captureScreenshots?: ScreenshotCaptureMode;
 }
 
 export interface ViewportProfile {
@@ -177,7 +211,9 @@ export interface ResponsiveViewportResult {
   pageErrors: string[];
   failedRequests: string[];
   httpErrors: Array<{ status: number; url: string }>;
-  screenshotPath: string;
+  screenshotPath: string | null;
+  screenshotBytes?: number | undefined;
+  metricsHash?: string | undefined;
   tracePath?: string | null | undefined;
   cdpMetrics?: {
     jsHeapUsedSize?: number | undefined;
@@ -219,6 +255,7 @@ export interface InteractionScenarioInput {
   evidenceDirectory: string;
   timeoutMs: number;
   allowRiskyActions: boolean;
+  captureScreenshots?: ScreenshotCaptureMode;
 }
 
 export interface InteractionScenarioReport {
@@ -232,7 +269,9 @@ export interface InteractionScenarioReport {
   pageErrors: string[];
   failedRequests: string[];
   httpErrors: Array<{ status: number; url: string }>;
-  screenshotPath: string;
+  screenshotPath: string | null;
+  screenshotBytes?: number | undefined;
+  metricsHash?: string | undefined;
   reportPath: string;
 }
 

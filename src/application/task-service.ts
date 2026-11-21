@@ -1,4 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import type {
+  AutonomyMode,
+  ProjectBlueprint,
+  RequirementTraceabilityEntry,
+  TaskHandoff
+} from '../domain/blueprint.js';
 import type { StateRepository } from '../domain/ports.js';
 import type {
   BatchClaimItem,
@@ -11,13 +17,15 @@ import type {
   QualityCheckpoint,
   ServerProcessRecord,
   TaskNode,
-  TaskStatus
+  TaskStatus,
+  WorkDomain
 } from '../domain/models.js';
 import { QUALITY_DIMENSIONS } from '../domain/models.js';
 import { ConflictError, NotFoundError, ValidationError } from '../domain/errors.js';
 import { findLockConflict, normalizeOwnedPath, normalizeOwnedPaths, pathsOverlap } from '../domain/file-ownership.js';
 import { computeDownstreamMetrics } from '../domain/dag-validator.js';
 import { TaskPlanner, type CreatePlanInput } from './task-planner.js';
+import { selectTaskEffortProfile } from './skill-router.js';
 
 const now = () => new Date().toISOString();
 
@@ -161,6 +169,45 @@ export class TaskService {
       for (const checkpoint of checkpoints) state.checkpoints[checkpoint.id] = checkpoint;
     });
     return { plan, tasks, checkpoints };
+  }
+
+  async createPlanFromBlueprint(
+    blueprint: ProjectBlueprint,
+    options: {
+      autonomyMode?: AutonomyMode;
+      maxRepairIterations?: number;
+      maxSubagentsPerWave?: number;
+      tokenBudget?: number | null;
+    } = {}
+  ): Promise<{ plan: ExecutionPlan; tasks: TaskNode[]; checkpoints: QualityCheckpoint[]; blueprint: ProjectBlueprint }> {
+    const { plan, tasks } = this.planner.createFromBlueprint(blueprint, options);
+    const checkpointSet = QUALITY_DIMENSIONS.filter(item => plan.checkpointIds.includes(item.id));
+    const checkpoints: QualityCheckpoint[] = checkpointSet.map(item => ({
+      id: `${plan.id}:${item.id}`,
+      title: item.title,
+      status: 'pending',
+      required: item.required || (item.id === 'motion' && plan.domains.includes('motion')) || (item.id === '3d-rendering' && plan.domains.includes('threejs')),
+      evidenceIds: [],
+      reason: null,
+      updatedAt: now()
+    }));
+
+    await this.repository.transact(state => {
+      state.blueprints = state.blueprints ?? {};
+      state.blueprints[blueprint.id] = blueprint;
+      state.plans[plan.id] = plan;
+      for (const task of tasks) state.tasks[task.id] = task;
+      for (const checkpoint of checkpoints) state.checkpoints[checkpoint.id] = checkpoint;
+    });
+
+    return { plan, tasks, checkpoints, blueprint };
+  }
+
+  async getBlueprint(blueprintId: string): Promise<ProjectBlueprint> {
+    const state = await this.repository.read();
+    const bp = state.blueprints?.[blueprintId];
+    if (!bp) throw new NotFoundError('Blueprint', blueprintId);
+    return bp;
   }
 
   async getPlan(planId: string): Promise<{ plan: ExecutionPlan; tasks: TaskNode[]; checkpoints: QualityCheckpoint[] }> {
@@ -600,7 +647,13 @@ export class TaskService {
     });
   }
 
-  async completeTask(taskId: string, status: Extract<TaskStatus, 'completed' | 'blocked' | 'failed'>, evidenceIds: string[] = [], reason: string | null = null): Promise<TaskNode> {
+  async completeTask(
+    taskId: string,
+    status: Extract<TaskStatus, 'completed' | 'blocked' | 'failed'>,
+    evidenceIds: string[] = [],
+    reason: string | null = null,
+    handoff: TaskHandoff | null = null
+  ): Promise<TaskNode> {
     return this.repository.transact(state => {
       const task = state.tasks[taskId];
       if (!task) throw new NotFoundError('Task', taskId);
@@ -613,10 +666,32 @@ export class TaskService {
       if (unrelated.length) throw new ValidationError(`Evidence must belong to this plan and may only be linked to this task: ${unrelated.join(', ')}`);
       releaseLocksForTasks(state, new Set([taskId]));
       const timestamp = now();
-      const updated: TaskNode = { ...task, status, evidenceIds: [...new Set([...task.evidenceIds, ...evidenceIds])], failureReason: reason, completedAt: status === 'completed' ? timestamp : null, updatedAt: timestamp };
+      const updated: TaskNode = {
+        ...task,
+        status,
+        evidenceIds: [...new Set([...task.evidenceIds, ...evidenceIds])],
+        failureReason: reason,
+        handoff: handoff ?? task.handoff ?? null,
+        completedAt: status === 'completed' ? timestamp : null,
+        updatedAt: timestamp
+      };
       state.tasks[taskId] = updated;
       const plan = state.plans[task.planId];
-      if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
+      if (plan) {
+        const telemetry = plan.telemetry ? { ...plan.telemetry } : undefined;
+        if (telemetry && status === 'completed') {
+          if (task.executionMode === 'subagent') {
+            telemetry.subagentsSpawned += 1;
+          }
+          const packetTokens = task.estimatedPacketTokens ?? Math.max(80, Math.ceil((task.title.length + task.description.length + JSON.stringify(handoff ?? {}).length) / 4));
+          telemetry.totalPacketTokens += packetTokens;
+        }
+        state.plans[task.planId] = {
+          ...plan,
+          ...(telemetry ? { telemetry } : {}),
+          updatedAt: timestamp
+        };
+      }
       return updated;
     });
   }
@@ -778,5 +853,187 @@ export class TaskService {
       if (!current) throw new NotFoundError('Server process', id);
       state.serverProcesses[id] = { ...current, ...patch };
     });
+  }
+
+  async approvePhase(planId: string, phaseId: string): Promise<ExecutionPlan> {
+    return this.repository.transact(state => {
+      const plan = state.plans[planId];
+      if (!plan) throw new NotFoundError('Plan', planId);
+      const approved = new Set(plan.approvedPhaseIds ?? []);
+      approved.add(phaseId);
+      const updated: ExecutionPlan = { ...plan, approvedPhaseIds: [...approved], updatedAt: now() };
+      state.plans[planId] = updated;
+      return updated;
+    });
+  }
+
+  async createTargetedRepairTask(
+    planId: string,
+    failedTaskId: string,
+    defectSummary: string,
+    failedEvidenceIds: string[],
+    domainOverride?: WorkDomain
+  ): Promise<{ repairTask: TaskNode; reopenedTask: TaskNode }> {
+    return this.repository.transact(state => {
+      const plan = state.plans[planId];
+      if (!plan) throw new NotFoundError('Plan', planId);
+      const failedTask = state.tasks[failedTaskId];
+      if (!failedTask || failedTask.planId !== planId) throw new NotFoundError('Task', failedTaskId);
+      if (plan.repairIterations >= plan.maxRepairIterations) {
+        throw new ConflictError(`Repair budget exhausted (${plan.maxRepairIterations}). Escalate to human review.`);
+      }
+
+      const targetDomain: WorkDomain = domainOverride ?? failedTask.domains[0] ?? 'frontend';
+      const profile = selectTaskEffortProfile('repair', targetDomain, 1);
+      const timestamp = now();
+      const repairId = randomUUID();
+
+      const repairTask: TaskNode = {
+        id: repairId,
+        planId,
+        title: `Targeted repair for: ${failedTask.title}`,
+        description: `Fix root-cause defect(s) reported by failed verification: ${defectSummary}. Failed evidence IDs: ${failedEvidenceIds.join(', ') || 'none'}. Do not broaden scope.`,
+        ownerRole: targetDomain === 'threejs' ? 'threejs-developer' : targetDomain === 'backend' ? 'backend-developer' : 'frontend-developer',
+        skillIds: profile.skillIds,
+        primarySkill: profile.primarySkill,
+        executionMode: 'subagent',
+        modelTier: profile.modelTier,
+        moduleIds: [15, 18, 25, 61],
+        domains: [targetDomain],
+        dependsOn: [],
+        ownedPaths: [],
+        recommendedPaths: failedTask.recommendedPaths ?? ['src'],
+        status: 'pending',
+        parallelGroup: 'targeted-repair',
+        requiredEvidence: true,
+        evidenceIds: [],
+        claimedBy: null,
+        phaseId: failedTask.phaseId ?? null,
+        phaseName: failedTask.phaseName ?? null,
+        phaseOrder: failedTask.phaseOrder ?? null,
+        requirementIds: failedTask.requirementIds ?? [],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: null,
+        failureReason: null
+      };
+
+      // Reopen failedTask so it now depends on repairTask
+      releaseLocksForTasks(state, new Set([failedTaskId]));
+      const reopenedTask: TaskNode = {
+        ...failedTask,
+        status: 'pending',
+        claimedBy: null,
+        leaseExpiresAt: null,
+        ownedPaths: [],
+        dependsOn: [...new Set([...failedTask.dependsOn, repairId])],
+        failureReason: `Awaiting targeted repair (${repairId}): ${defectSummary}`,
+        updatedAt: timestamp
+      };
+
+      state.tasks[repairId] = repairTask;
+      state.tasks[failedTaskId] = reopenedTask;
+
+      const updatedPhases = (plan.phases ?? []).map(p =>
+        p.id === failedTask.phaseId ? { ...p, taskIds: [...p.taskIds, repairId] } : p
+      );
+      const telemetry = plan.telemetry
+        ? {
+            ...plan.telemetry,
+            skillsUsed: [...new Set([...plan.telemetry.skillsUsed, ...profile.skillIds])].sort()
+          }
+        : undefined;
+
+      state.plans[planId] = {
+        ...plan,
+        taskIds: [...plan.taskIds, repairId],
+        repairIterations: plan.repairIterations + 1,
+        ...(plan.phases ? { phases: updatedPhases } : {}),
+        ...(telemetry ? { telemetry } : {}),
+        updatedAt: timestamp
+      };
+
+      return { repairTask, reopenedTask };
+    });
+  }
+
+  async getRequirementTraceability(planId: string): Promise<RequirementTraceabilityEntry[]> {
+    const state = await this.repository.read();
+    const plan = state.plans[planId];
+    if (!plan) throw new NotFoundError('Plan', planId);
+    const blueprint = plan.blueprintId ? state.blueprints?.[plan.blueprintId] : undefined;
+    if (!blueprint) return [];
+
+    const planTasks = plan.taskIds.map(id => state.tasks[id]).filter((t): t is TaskNode => Boolean(t));
+    return blueprint.requirements.map(req => {
+      const linkedTasks = planTasks.filter(t => (t.requirementIds ?? []).includes(req.id));
+      const completedTasks = linkedTasks.filter(t => t.status === 'completed');
+      const evidenceIds = [...new Set(completedTasks.flatMap(t => t.evidenceIds))];
+      return {
+        requirementId: req.id,
+        phaseId: req.phaseId,
+        title: req.title,
+        priority: req.priority,
+        taskIds: linkedTasks.map(t => t.id),
+        completedTaskIds: completedTasks.map(t => t.id),
+        evidenceIds,
+        verified: linkedTasks.length > 0 && completedTasks.length === linkedTasks.length && evidenceIds.length > 0
+      };
+    });
+  }
+
+  async getProtectedEvidencePaths(): Promise<Set<string>> {
+    const state = await this.repository.read();
+    const protectedIds = new Set<string>();
+    for (const cp of Object.values(state.checkpoints)) {
+      if (cp.status === 'pass') {
+        for (const id of cp.evidenceIds) protectedIds.add(id);
+      }
+    }
+    for (const task of Object.values(state.tasks)) {
+      if (task.status === 'in_progress') {
+        for (const id of task.evidenceIds) protectedIds.add(id);
+      }
+    }
+    const paths = new Set<string>();
+    for (const evId of protectedIds) {
+      const ev = state.evidence[evId];
+      if (ev?.path) paths.add(ev.path);
+    }
+    return paths;
+  }
+
+  async purgeArchivedPlan(planId: string): Promise<{ removedTasks: number; removedCheckpoints: number; removedEvidence: number }> {
+    return this.repository.transact(state => {
+      const plan = state.plans[planId];
+      if (!plan) throw new NotFoundError('Plan', planId);
+      const taskSet = new Set(plan.taskIds);
+      releaseLocksForTasks(state, taskSet);
+      let removedTasks = 0;
+      for (const taskId of plan.taskIds) {
+        if (state.tasks[taskId]) { delete state.tasks[taskId]; removedTasks++; }
+      }
+      let removedCheckpoints = 0;
+      for (const cpDim of plan.checkpointIds) {
+        const key = `${planId}:${cpDim}`;
+        if (state.checkpoints[key]) { delete state.checkpoints[key]; removedCheckpoints++; }
+      }
+      let removedEvidence = 0;
+      for (const [evId, ev] of Object.entries(state.evidence)) {
+        if (ev.planId === planId) { delete state.evidence[evId]; removedEvidence++; }
+      }
+      delete state.plans[planId];
+      return { removedTasks, removedCheckpoints, removedEvidence };
+    });
+  }
+
+  async getStorageStats() {
+    return this.repository.getStorageStats ? this.repository.getStorageStats() : null;
+  }
+
+  async vacuumStorage(pages = 100): Promise<void> {
+    if (this.repository.vacuumIncremental) {
+      await this.repository.vacuumIncremental(pages);
+    }
   }
 }

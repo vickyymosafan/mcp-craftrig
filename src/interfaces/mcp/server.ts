@@ -4,18 +4,27 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { waitForLocalUrl } from '../../infrastructure/runtime/localhost-readiness.js';
 import type { TaskService } from '../../application/task-service.js';
+import type { BlueprintArchitectService } from '../../application/blueprint-architect.js';
+import { AutopilotService } from '../../application/autopilot-service.js';
+import { parseMarkdownBlueprint } from '../../application/blueprint-parser.js';
+import { archivePlanSnapshot, enforceEvidenceQuota } from '../../infrastructure/persistence/evidence-store.js';
 import type { BrowserInspectorPort, DevServerPort } from '../../domain/ports.js';
+import type { ProjectBlueprint } from '../../domain/blueprint.js';
 import type { WorkspaceGuard } from '../../infrastructure/security/workspace-guard.js';
 import type { FileSkillRegistry } from '../../infrastructure/skills/file-skill-registry.js';
 import type { ModuleRegistry } from '../../infrastructure/catalog/module-registry.js';
 import type { ChecklistDocumentWriter } from '../../infrastructure/persistence/checklist-document-writer.js';
 import {
+  toAnswerInterviewInput,
+  toAutopilotNextOptions,
   toClaimReadyBatchInput,
   toClaimTaskInput,
   toCreatePlanInput,
+  toIngestBlueprintOptions,
   toInteractionActions,
   toListFileLocksFilter,
   toReleaseFileLocksInput,
+  toStartInterviewInput,
   toVisualA11yAuditInput
 } from './input-normalizers.js';
 
@@ -24,6 +33,8 @@ interface Dependencies {
   harnessRoot: string;
   guard: WorkspaceGuard;
   taskService: TaskService;
+  blueprintArchitect?: BlueprintArchitectService;
+  autopilotService?: AutopilotService;
   inspector: BrowserInspectorPort;
   devServer: DevServerPort;
   skillRegistry: FileSkillRegistry;
@@ -31,13 +42,36 @@ interface Dependencies {
   checklistWriter: ChecklistDocumentWriter;
   maxParallelTasks: number;
   browserTimeoutMs: number;
+  evidenceQuotaBytes?: number;
 }
 
 const workDomains = ['frontend', 'backend', 'design', 'responsive', 'threejs', 'motion', 'security', 'data', 'release'] as const;
 const checkpointIds = ['responsive', 'layout', 'interaction', 'typography-color', 'motion', '3d-rendering', 'accessibility', 'performance', 'security', 'final-regression'] as const;
+const interviewModes = ['quick', 'standard', 'deep'] as const;
+const blueprintPresets = ['portfolio', 'landing', 'ecommerce', 'saas-dashboard', '3d-showroom', 'fullstack-app'] as const;
+const autonomyModes = ['full-auto', 'phase-gate'] as const;
+const captureModes = ['failures-only', 'all'] as const;
 const ownedPathSchema = z.string().min(1).max(500);
 const viewportSchema = z.object({ name: z.string().min(1), width: z.number().int().min(240).max(7680), height: z.number().int().min(320).max(4320), isMobile: z.boolean(), hasTouch: z.boolean(), deviceScaleFactor: z.number().min(1).max(3) });
 const actionSchema = z.object({ action: z.enum(['click', 'fill', 'check', 'uncheck', 'select', 'press', 'expect-visible', 'expect-text']), selector: z.string().min(1), value: z.string().optional(), timeoutMs: z.number().int().min(500).max(120000).optional() });
+const handoffSchema = z.object({
+  summary: z.string().min(1).max(2000),
+  changedFiles: z.array(z.string().max(500)).max(200).default([]),
+  contracts: z.array(z.string().max(500)).max(100).default([]),
+  decisions: z.array(z.string().max(500)).max(50).default([]),
+  testsRun: z.array(z.string().max(500)).max(50).default([])
+});
+
+async function emitProgress(ctx: unknown, progress: number, total: number, message: string): Promise<void> {
+  const mcpReq = (ctx as { mcpReq?: { _meta?: { progressToken?: string | number }; notify?: (payload: unknown) => Promise<void> } } | undefined)?.mcpReq;
+  const progressToken = mcpReq?._meta?.progressToken;
+  if (progressToken !== undefined && typeof mcpReq?.notify === 'function') {
+    await mcpReq.notify({
+      method: 'notifications/progress',
+      params: { progressToken, progress, total, message }
+    }).catch(() => undefined);
+  }
+}
 
 function result(value: unknown) { return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }; }
 function errorResult(error: unknown, recoveryHint?: string) {
@@ -73,7 +107,9 @@ function errorResult(error: unknown, recoveryHint?: string) {
 }
 
 export function createMcpServer(deps: Dependencies): McpServer {
-  const server = new McpServer({ name: 'craftrig', version: '0.1.0' });
+  const server = new McpServer({ name: 'craftrig', version: '0.2.0' });
+  const autopilot = deps.autopilotService ?? new AutopilotService(deps.taskService, deps.maxParallelTasks);
+  const evidenceQuotaBytes = deps.evidenceQuotaBytes ?? 50 * 1024 * 1024;
   const assertWorkspacePaths = async (paths: readonly string[]) => {
     await Promise.all(paths.map(target => deps.guard.resolvePotentialPathInsideWorkspace(target)));
   };
@@ -85,11 +121,199 @@ export function createMcpServer(deps: Dependencies): McpServer {
       inputSchema?: T;
       annotations?: { readOnlyHint?: boolean; idempotentHint?: boolean; destructiveHint?: boolean };
     },
-    handler: (input: z.infer<T>) => Promise<any>
+    handler: (input: z.infer<T>, ctx?: unknown) => Promise<any>
   ) {
     (server.registerTool as any)(`craftrig.${name}`, config, handler);
     (server.registerTool as any)(`harness.${name}`, config, handler);
   }
+
+  registerToolWithAlias('start_blueprint_interview', {
+    description: 'Start an adaptive Blueprint Architect interview when the user does not have a full blueprint yet. Scans the workspace first to pre-fill detectable tech stack/routes, then returns 2-4 crisp questions per round (default mode: deep) with recommended defaults and elicitation schema ready for the host LLM to ask the user.',
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
+    inputSchema: z.object({
+      initialIdea: z.string().min(5).max(8000),
+      title: z.string().min(1).max(160).optional(),
+      mode: z.enum(interviewModes).default('deep'),
+      preset: z.enum(blueprintPresets).optional()
+    })
+  }, async input => {
+    try {
+      if (!deps.blueprintArchitect) {
+        return errorResult(new Error('BlueprintArchitectService is not configured on this MCP server instance.'));
+      }
+      return result(await deps.blueprintArchitect.startInterview(toStartInterviewInput(input)));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  registerToolWithAlias('answer_blueprint_questions', {
+    description: 'Submit user answers (or skipWithDefaults) for an active Blueprint Architect interview. Adapts follow-up questions dynamically, runs the Blueprint Linter for contradictions/unmeasurable criteria, and compiles blueprint.md + blueprint.json with REQ-ID traceability once complete.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      sessionId: z.string().uuid(),
+      answers: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({}),
+      skipWithDefaults: z.array(z.string()).optional(),
+      finalizeNow: z.boolean().optional()
+    })
+  }, async input => {
+    try {
+      if (!deps.blueprintArchitect) {
+        return errorResult(new Error('BlueprintArchitectService is not configured on this MCP server instance.'));
+      }
+      return result(await deps.blueprintArchitect.answerQuestions(toAnswerInterviewInput(input)));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  registerToolWithAlias('ingest_blueprint', {
+    description: 'Ingest a full project blueprint (by blueprintId from Blueprint Architect, freeform Markdown, or structured JSON) and compile a token-efficient Multi-Phase Execution DAG covering ALL phases, routing only required skills (skipping unneeded skills) and returning the first autopilot_next wave.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      blueprintId: z.string().uuid().optional(),
+      markdown: z.string().min(20).max(60000).optional(),
+      title: z.string().min(1).max(160).optional(),
+      autonomyMode: z.enum(autonomyModes).optional(),
+      maxRepairIterations: z.number().int().min(1).max(12).optional(),
+      maxSubagentsPerWave: z.number().int().min(1).max(16).optional(),
+      tokenBudget: z.number().int().min(1000).max(500000).nullable().optional()
+    })
+  }, async (input, ctx) => {
+    try {
+      let blueprint: ProjectBlueprint;
+      if (input.blueprintId) {
+        blueprint = await deps.taskService.getBlueprint(input.blueprintId);
+      } else if (input.markdown) {
+        blueprint = parseMarkdownBlueprint({
+          markdown: input.markdown,
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.autonomyMode !== undefined ? { autonomyMode: input.autonomyMode } : {})
+        });
+      } else {
+        return errorResult(new Error('ValidationError: Provide either blueprintId or markdown to ingest_blueprint.'));
+      }
+
+      await emitProgress(ctx, 1, 3, `Compiling multi-phase DAG for "${blueprint.title}" (${blueprint.phases.length} phases)...`);
+      const created = await deps.taskService.createPlanFromBlueprint(blueprint, toIngestBlueprintOptions(input));
+      const checklistPath = await deps.checklistWriter.write(created.plan.id);
+      await emitProgress(ctx, 2, 3, 'Preparing first autopilot wave...');
+      const firstWave = await autopilot.next(created.plan.id);
+      await emitProgress(ctx, 3, 3, `Ready: ${created.tasks.length} tasks across ${created.plan.phases?.length ?? 1} phases.`);
+      return result({
+        ...created,
+        checklistPath,
+        firstWave
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  registerToolWithAlias('autopilot_next', {
+    description: 'Advance the Craftrig Blueprint Autopilot loop by one step. Auto-recovers expired leases, prioritizes zero-token deterministic checks before spawning QA subagents, returns compact disjoint parallel subagent wave manifests (with Tier-1 skill paths & packet URIs), spawns targeted 1-skill repair tasks on failure, and emits progress notifications.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      planId: z.string().uuid(),
+      approvePhaseId: z.string().min(1).max(120).optional(),
+      maxWaveSize: z.number().int().min(1).max(16).optional()
+    })
+  }, async (input, ctx) => {
+    try {
+      const nextWave = await autopilot.next(input.planId, toAutopilotNextOptions(input));
+      await emitProgress(
+        ctx,
+        nextWave.progress.tasksDone,
+        Math.max(1, nextWave.progress.tasksTotal),
+        `[${nextWave.state}] ${nextWave.phase?.name ?? 'Autopilot'} — ${nextWave.progress.tasksDone}/${nextWave.progress.tasksTotal} tasks (${nextWave.progress.percentage}%)`
+      );
+      return result(nextWave);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  registerToolWithAlias('autopilot_resume', {
+    description: 'Recover orphaned file locks and expired agent leases after a crash or session restart, then resume the exact active phase and wave via autopilot_next.',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({ planId: z.string().uuid() })
+  }, async ({ planId }, ctx) => {
+    try {
+      const resumed = await autopilot.resume(planId);
+      await emitProgress(
+        ctx,
+        resumed.progress.tasksDone,
+        Math.max(1, resumed.progress.tasksTotal),
+        `Resumed (${resumed.recoveredLocksCount} lock(s) recovered): ${resumed.phase?.name ?? 'Autopilot'}`
+      );
+      return result(resumed);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  registerToolWithAlias('archive_plan', {
+    description: 'Compress a completed plan snapshot into a Brotli archive (.craftrig/archive/<planId>.json.br), remove it from active state, run SQLite incremental vacuum, and enforce the evidence disk quota to keep RAM and disk usage minimal.',
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
+    inputSchema: z.object({ planId: z.string().uuid(), force: z.boolean().default(false) })
+  }, async ({ planId, force }) => {
+    try {
+      const snapshot = await deps.taskService.getPlan(planId);
+      const evidence = await deps.taskService.getEvidenceForPlan(planId);
+      const traceability = await deps.taskService.getRequirementTraceability(planId);
+      const incomplete = snapshot.tasks.some(t => t.status === 'pending' || t.status === 'in_progress');
+      if (incomplete && !force) {
+        return errorResult(new Error('ConflictError: Plan still has pending or in_progress tasks. Pass force=true to archive anyway.'));
+      }
+      const archiveDir = await deps.guard.ensureEvidenceDirectory(path.join('.craftrig', 'archive'));
+      const archiveResult = await archivePlanSnapshot(archiveDir, planId, {
+        ...snapshot,
+        evidence,
+        traceability,
+        archivedAt: new Date().toISOString()
+      });
+      const purged = await deps.taskService.purgeArchivedPlan(planId);
+      await deps.taskService.vacuumStorage(200);
+      const evidenceDir = await deps.guard.ensureEvidenceDirectory();
+      const protectedRel = await deps.taskService.getProtectedEvidencePaths();
+      const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
+      const quotaResult = await enforceEvidenceQuota(evidenceDir, evidenceQuotaBytes, protectedAbs);
+      return result({
+        archivePath: path.relative(deps.workspaceRoot, archiveResult.archivePath).replace(/\\/g, '/'),
+        rawBytes: archiveResult.rawBytes,
+        compressedBytes: archiveResult.compressedBytes,
+        compressionRatio: archiveResult.compressionRatio,
+        purged,
+        quotaResult
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  registerToolWithAlias('storage_maintenance', {
+    description: 'Inspect lean storage statistics (DB size, WAL size, entity counts), run SQLite incremental vacuum + WAL truncate, and enforce the workspace evidence disk quota (LRU eviction that protects active/PASS checkpoint evidence).',
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      enforceQuota: z.boolean().default(true),
+      vacuumPages: z.number().int().min(10).max(5000).default(200)
+    })
+  }, async ({ enforceQuota, vacuumPages }) => {
+    try {
+      await deps.taskService.vacuumStorage(vacuumPages);
+      const stats = await deps.taskService.getStorageStats();
+      let quota = null;
+      if (enforceQuota) {
+        const evidenceDir = await deps.guard.ensureEvidenceDirectory();
+        const protectedRel = await deps.taskService.getProtectedEvidencePaths();
+        const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
+        quota = await enforceEvidenceQuota(evidenceDir, evidenceQuotaBytes, protectedAbs);
+      }
+      return result({ stats, quota, configuredQuotaMb: Math.round(evidenceQuotaBytes / (1024 * 1024)) });
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
 
   registerToolWithAlias('create_execution_plan', {
     description: 'Create a persistent task DAG for an engineering request. Returns parallel-ready workstreams, agent roles, Skill IDs, module references, and quality checkpoints. The host orchestrator must delegate ready tasks to native subagents.',
@@ -212,10 +436,16 @@ export function createMcpServer(deps: Dependencies): McpServer {
   } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('complete_task', {
-    description: 'Complete, block, or fail a claimed task. Completed tasks that require evidence must include at least one existing evidence ID.',
+    description: 'Complete, block, or fail a claimed task. Completed tasks that require evidence must include at least one existing evidence ID. Optionally attach a structured handoff (summary, changedFiles, contracts, decisions, testsRun) so downstream subagents receive concise context without transcript bloat.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
-    inputSchema: z.object({ taskId: z.string().uuid(), status: z.enum(['completed', 'blocked', 'failed']), evidenceIds: z.array(z.string().uuid()).default([]), reason: z.string().max(2000).nullable().optional() })
-  }, async ({ taskId, status, evidenceIds, reason }) => { try { const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null); const checklistPath = await deps.checklistWriter.write(task.planId); return result({ task, checklistPath }); } catch (error) { return errorResult(error); } });
+    inputSchema: z.object({
+      taskId: z.string().uuid(),
+      status: z.enum(['completed', 'blocked', 'failed']),
+      evidenceIds: z.array(z.string().uuid()).default([]),
+      reason: z.string().max(2000).nullable().optional(),
+      handoff: handoffSchema.nullable().optional()
+    })
+  }, async ({ taskId, status, evidenceIds, reason, handoff }) => { try { const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null, handoff ?? null); const checklistPath = await deps.checklistWriter.write(task.planId); return result({ task, checklistPath }); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('record_evidence', {
     description: 'Record auditable evidence for a plan or task. Evidence paths must be workspace-relative; do not record an assertion as evidence without an artifact or reproducible source.',
@@ -311,29 +541,33 @@ export function createMcpServer(deps: Dependencies): McpServer {
   }, async ({ processId }) => { try { return result(await deps.devServer.stop(processId)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.inspect_responsive', {
-    description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect full-page screenshots, DOM overflow measurements, console/page/network errors, and a JSON report. This is the responsive-first browser QA tool.',
+    description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect lean JPEG screenshots (failures-only by default, SHA-256 deduplicated), DOM overflow metrics + metricsHash, console/page/network errors, and a JSON report. This is the responsive-first browser QA tool.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
-    inputSchema: z.object({ baseUrl: z.string().url(), routes: z.array(z.string()).default(['/']), viewports: z.array(viewportSchema).optional(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowedOverflowSelectors: z.array(z.string()).default([]), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('responsive-qa-agent') })
+    inputSchema: z.object({ baseUrl: z.string().url(), routes: z.array(z.string()).default(['/']), viewports: z.array(viewportSchema).optional(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowedOverflowSelectors: z.array(z.string()).default([]), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('responsive-qa-agent') })
   }, async input => { try {
     const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
-    const report = await deps.inspector.inspectResponsive({ baseUrl: input.baseUrl, routes: input.routes, viewports: input.viewports ?? [], evidenceDirectory, timeoutMs: input.timeoutMs, allowedOverflowSelectors: input.allowedOverflowSelectors });
-    const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Responsive inspection: ${report.runId}`, description: `${report.passedCases}/${report.totalCases} route/viewport cases passed. Overall: ${report.overallStatus}.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { runId: report.runId, overallStatus: report.overallStatus, passedCases: report.passedCases, failedCases: report.failedCases, results: report.results.map(item => ({ route: item.route, viewport: item.viewport.name, passed: item.passed, issues: item.issues })) }, createdBy: input.createdBy });
+    const report = await deps.inspector.inspectResponsive({ baseUrl: input.baseUrl, routes: input.routes, viewports: input.viewports ?? [], evidenceDirectory, timeoutMs: input.timeoutMs, allowedOverflowSelectors: input.allowedOverflowSelectors, captureScreenshots: input.captureScreenshots });
+    const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Responsive inspection: ${report.runId}`, description: `${report.passedCases}/${report.totalCases} route/viewport cases passed. Overall: ${report.overallStatus}.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { runId: report.runId, overallStatus: report.overallStatus, passedCases: report.passedCases, failedCases: report.failedCases, results: report.results.map(item => ({ route: item.route, viewport: item.viewport.name, passed: item.passed, metricsHash: item.metricsHash, issues: item.issues })) }, createdBy: input.createdBy });
+    const protectedRel = await deps.taskService.getProtectedEvidencePaths();
+    const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
+    protectedAbs.add(path.resolve(report.reportPath));
+    await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
     return result({ ...report, evidenceId: evidence.id, nextAction: report.overallStatus === 'pass' ? 'Record responsive checkpoint as PASS with this evidence ID, then continue to layout inspection.' : 'Diagnose failed route/viewport cases, repair source code, then rerun this tool. Do not mark responsive PASS.' });
   } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.run_interaction_scenario', {
     description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. Potentially destructive selectors are blocked unless allowRiskyActions is explicitly true for an isolated test environment.',
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
-    inputSchema: z.object({ baseUrl: z.string().url(), route: z.string().default('/'), actions: z.array(actionSchema).min(1).max(100), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowRiskyActions: z.boolean().default(false), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('functional-qa-agent') })
+    inputSchema: z.object({ baseUrl: z.string().url(), route: z.string().default('/'), actions: z.array(actionSchema).min(1).max(100), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowRiskyActions: z.boolean().default(false), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('functional-qa-agent') })
   }, async input => { try {
     const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
-    const report = await deps.inspector.runInteractionScenario({ baseUrl: input.baseUrl, route: input.route, actions: toInteractionActions(input.actions), evidenceDirectory, timeoutMs: input.timeoutMs, allowRiskyActions: input.allowRiskyActions });
-    const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Interaction scenario: ${report.runId}`, description: `${report.steps.filter(step => step.status === 'pass').length}/${report.steps.length} interaction steps passed.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { passed: report.passed, steps: report.steps }, createdBy: input.createdBy });
+    const report = await deps.inspector.runInteractionScenario({ baseUrl: input.baseUrl, route: input.route, actions: toInteractionActions(input.actions), evidenceDirectory, timeoutMs: input.timeoutMs, allowRiskyActions: input.allowRiskyActions, captureScreenshots: input.captureScreenshots });
+    const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Interaction scenario: ${report.runId}`, description: `${report.steps.filter(step => step.status === 'pass').length}/${report.steps.length} interaction steps passed.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { passed: report.passed, metricsHash: report.metricsHash, steps: report.steps }, createdBy: input.createdBy });
     return result({ ...report, evidenceId: evidence.id });
   } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost.audit_visual_a11y', {
-    description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost.',
+    description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost. Captures deduplicated JPEG screenshots on failures-only by default to save disk.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({
       baseUrl: z.string().url(),
@@ -343,6 +577,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
       expectedSectionPolarity: z.enum(['follow-active-theme', 'contrast-bands', 'always-dark-media-showcase', 'always-light-reading', 'custom']).optional(),
       themeToggleSelector: z.string().min(1).max(200).optional(),
       testReducedMotion: z.boolean().default(true),
+      captureScreenshots: z.enum(captureModes).default('failures-only'),
       timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs),
       planId: z.string().uuid().nullable().optional(),
       taskId: z.string().uuid().nullable().optional(),
@@ -358,6 +593,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
       expectedSectionPolarity: input.expectedSectionPolarity,
       themeToggleSelector: input.themeToggleSelector,
       testReducedMotion: input.testReducedMotion,
+      captureScreenshots: input.captureScreenshots,
       evidenceDirectory,
       timeoutMs: input.timeoutMs
     }));
@@ -384,11 +620,16 @@ export function createMcpServer(deps: Dependencies): McpServer {
           colorScheme: item.colorScheme,
           viewport: item.viewport.name,
           passed: item.passed,
+          metricsHash: item.metricsHash,
           issues: item.issues
         }))
       },
       createdBy: input.createdBy
     });
+    const protectedRel = await deps.taskService.getProtectedEvidencePaths();
+    const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
+    protectedAbs.add(path.resolve(report.reportPath));
+    await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
     return result({
       ...report,
       evidenceId: evidence.id,
@@ -461,31 +702,15 @@ export function createMcpServer(deps: Dependencies): McpServer {
     'task-packet',
     'plans/{planId}/tasks/{taskId}/packet',
     {
-      title: 'Task Execution Packet',
-      description: 'Structured prompt context packet for a task, including parent plan, upstream dependencies, required skills, and catalog modules.',
+      title: 'Compact Task Execution Packet',
+      description: 'Token-budgeted prompt context packet for a subagent: task scope, REQ-ID acceptance criteria, Tier-1 primary skill path (progressive disclosure), and structured upstream handoff contracts only.',
       mimeType: 'application/json'
     },
     async (uri, params) => {
       try {
         const planId = String(params.planId ?? '');
         const taskId = String(params.taskId ?? '');
-        const { plan, tasks, checkpoints } = await deps.taskService.getPlan(planId);
-        const task = tasks.find(t => t.id === taskId);
-        if (!task) return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ error: `Task ${taskId} not found in plan ${planId}` }) }] };
-        const dependencies = tasks.filter(t => task.dependsOn.includes(t.id));
-        const allModules = await deps.moduleRegistry.list();
-        const relevantModules = allModules.filter(m => task.moduleIds.includes(m.id));
-        const allSkills = await deps.skillRegistry.list();
-        const relevantSkills = allSkills.filter(s => task.skillIds.includes(s.name));
-        const packet = {
-          planId,
-          planTitle: plan.title,
-          task,
-          dependencies,
-          relevantSkills,
-          relevantModules,
-          checkpoints: checkpoints.filter(c => task.domains.some(d => c.id.includes(d)))
-        };
+        const packet = await autopilot.buildCompactPacket(planId, taskId, 2500);
         return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(packet, null, 2) }] };
       } catch (err) {
         return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] };
@@ -516,6 +741,42 @@ export function createMcpServer(deps: Dependencies): McpServer {
     description: 'Plan and coordinate a project task using parallel subagents, Skills, MCP tools and independent verification.',
     argsSchema: z.object({ request: z.string().min(10), projectRoot: z.string().optional() })
   }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig.create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig.acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
+
+  server.registerPrompt('craftrig-autopilot', {
+    title: 'Craftrig Full-Blueprint Autopilot',
+    description: 'Run an entire project from idea or full blueprint through EVERY phase to verified completion using token-saving lazy skill routing, zero-token deterministic QA, and parallel host subagents.',
+    argsSchema: z.object({
+      input: z.string().min(5).describe('User project idea OR full Markdown blueprint.'),
+      hasBlueprint: z.boolean().default(false),
+      interviewMode: z.enum(interviewModes).default('deep'),
+      autonomyMode: z.enum(autonomyModes).default('full-auto')
+    })
+  }, ({ input, hasBlueprint, interviewMode, autonomyMode }) => ({
+    messages: [{
+      role: 'user' as const,
+      content: {
+        type: 'text' as const,
+        text: [
+          'Act as Craftrig Blueprint Autopilot Orchestrator.',
+          `Workspace: ${deps.workspaceRoot} | Max parallel subagents: ${deps.maxParallelTasks} | Autonomy: ${autonomyMode}.`,
+          '',
+          'OPERATING LOOP (DO NOT STOP AFTER PHASE 1 OR LANDING PAGE — FINISH EVERY PHASE):',
+          hasBlueprint
+            ? '1. Call craftrig.ingest_blueprint with the supplied markdown blueprint.'
+            : `1. No blueprint yet: call craftrig.start_blueprint_interview (mode="${interviewMode}"), relay questions[] to the user cleanly (using host interactive question UI if available), submit answers via craftrig.answer_blueprint_questions until blueprint is generated, get quick user approval, then call craftrig.ingest_blueprint.`,
+          '2. Loop craftrig.autopilot_next(planId):',
+          '   - If state === "verify": run deterministicChecks directly with MCP/CLI tools (0 subagent LLM tokens!). If all pass, record evidence, update quality checkpoints, complete_task, and continue.',
+          '   - If state === "dispatch" or "repair": call craftrig.claim_ready_batch for dispatchWave, spawn parallel host subagents ONLY for mode="subagent" tasks. Each subagent MUST read ONLY its packetUri and its single primarySkill file — NEVER load skipped skills!',
+          '   - Require every subagent to return structured handoff (summary, changedFiles, contracts, decisions, testsRun) and pass it to craftrig.complete_task.',
+          '   - If state === "needs_human": pause and present humanPrompt to the user.',
+          '   - Repeat across ALL phases until state === "done".',
+          '3. At state === "done": present REQ-ID traceability matrix + skill/token telemetry. Never deploy without explicit user authorization.',
+          '',
+          `USER INPUT:\n${input}`
+        ].join('\n')
+      }
+    }]
+  }));
 
   return server;
 }
