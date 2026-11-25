@@ -383,13 +383,13 @@ test('MCP server wires Blueprint Architect, ingest_blueprint, autopilot_next, ar
 
     const tools = (server as any)._registeredTools;
     for (const name of [
-      'craftrig.start_blueprint_interview',
-      'craftrig.answer_blueprint_questions',
-      'craftrig.ingest_blueprint',
-      'craftrig.autopilot_next',
-      'craftrig.autopilot_resume',
-      'craftrig.archive_plan',
-      'craftrig.storage_maintenance'
+      'craftrig_start_blueprint_interview',
+      'craftrig_answer_blueprint_questions',
+      'craftrig_ingest_blueprint',
+      'craftrig_autopilot_next',
+      'craftrig_autopilot_resume',
+      'craftrig_archive_plan',
+      'craftrig_storage_maintenance'
     ]) {
       assert.ok(tools[name], `Tool ${name} must be registered`);
     }
@@ -399,19 +399,19 @@ test('MCP server wires Blueprint Architect, ingest_blueprint, autopilot_next, ar
     assert.ok(prompts['craftrig-autopilot'], 'Prompt craftrig-autopilot must be registered');
 
     // End-to-end call: ingest_blueprint -> storage_maintenance -> archive_plan (force)
-    const ingestRes = await tools['craftrig.ingest_blueprint'].handler({
+    const ingestRes = await tools['craftrig_ingest_blueprint'].handler({
       markdown: '# Test Blueprint\n\n## Phase 1: Catalog\n- Product listing on /products\n\n## Phase 2: Cart\n- Cart page on /cart'
     });
     const ingested = JSON.parse(ingestRes.content[0].text);
     assert.ok(ingested.plan.id);
     assert.equal(ingested.firstWave.state, 'dispatch');
 
-    const maintRes = await tools['craftrig.storage_maintenance'].handler({ enforceQuota: true, vacuumPages: 50 });
+    const maintRes = await tools['craftrig_storage_maintenance'].handler({ enforceQuota: true, vacuumPages: 50 });
     const maint = JSON.parse(maintRes.content[0].text);
     assert.equal(maint.configuredQuotaMb, 50);
     assert.equal(maint.stats.backend, 'sqlite');
 
-    const archiveRes = await tools['craftrig.archive_plan'].handler({ planId: ingested.plan.id, force: true });
+    const archiveRes = await tools['craftrig_archive_plan'].handler({ planId: ingested.plan.id, force: true });
     const archived = JSON.parse(archiveRes.content[0].text);
     assert.ok(archived.archivePath.endsWith('.json.br'));
     assert.ok(archived.purged.removedTasks > 0);

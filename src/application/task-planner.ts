@@ -151,7 +151,7 @@ export class TaskPlanner {
       });
       const visual = add({
         title: 'Inspect typography, color and motion',
-        description: 'Run localhost.audit_visual_a11y across every enabled color scheme (light/dark) and validate typography scale, webfont loading, semantic colors, surface polarity, contrast, component states, animation intent and reduced-motion behavior.',
+        description: 'Run localhost_audit_visual_a11y across every enabled color scheme (light/dark) and validate typography scale, webfont loading, semantic colors, surface polarity, contrast, component states, animation intent and reduced-motion behavior.',
         ownerRole: 'design-qa-agent', skillIds: ['typography-engineering', 'color-theming', 'motion-animation'], moduleIds: [13, 15, 17, 21, 63],
         domains: ['design', 'motion'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['evidence/visual', 'src/theme']
@@ -165,7 +165,7 @@ export class TaskPlanner {
       }) : null;
       const accessibility = add({
         title: 'Run accessibility verification',
-        description: 'Run localhost.audit_visual_a11y (@axe-core/playwright + alpha-composited contrast + ARIA snapshot) across all enabled color schemes, then manually verify incomplete contrast items, keyboard order, focus visibility, zoom and reduced motion.',
+        description: 'Run localhost_audit_visual_a11y (@axe-core/playwright + alpha-composited contrast + ARIA snapshot) across all enabled color schemes, then manually verify incomplete contrast items, keyboard order, focus visibility, zoom and reduced motion.',
         ownerRole: 'accessibility-qa-agent', skillIds: ['accessibility-qa'], moduleIds: [15, 17, 18, 59, 63],
         domains: ['frontend'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
         recommendedPaths: ['evidence/a11y', 'tests/a11y']
@@ -354,7 +354,7 @@ export class TaskPlanner {
       deterministicToolTasks++;
       const verifyId = add({
         title: `[${phase.name}] Deterministic build & route verification`,
-        description: `Run zero-token deterministic checks (typecheck, build, and for UI routes [${phase.routes.join(', ')}]: localhost.inspect_responsive + localhost.audit_visual_a11y). Only spawn targeted repair subagent if checks fail.`,
+        description: `Run zero-token deterministic checks (typecheck, build, and for UI routes [${phase.routes.join(', ')}]: localhost_inspect_responsive + localhost_audit_visual_a11y). Only spawn targeted repair subagent if checks fail.`,
         ownerRole: 'integration-lead',
         skillIds: verifyProfile.skillIds,
         primarySkill: verifyProfile.primarySkill,
@@ -392,7 +392,7 @@ export class TaskPlanner {
       deterministicToolTasks++;
       const finalDeterministicQa = add({
         title: 'Final cross-phase deterministic UI, Contrast, A11y & WebGL verification',
-        description: `Run localhost.inspect_responsive and localhost.audit_visual_a11y across all blueprint routes [${blueprint.routes.join(', ')}] in enabled color scheme(s) (${blueprint.themePolicy.mode}). Zero subagents spawned if all checks PASS; targeted repair subagent spawned only on defects.`,
+        description: `Run localhost_inspect_responsive and localhost_audit_visual_a11y across all blueprint routes [${blueprint.routes.join(', ')}] in enabled color scheme(s) (${blueprint.themePolicy.mode}). Zero subagents spawned if all checks PASS; targeted repair subagent spawned only on defects.`,
         ownerRole: 'responsive-qa-agent',
         skillIds: finalQaProfile.skillIds,
         primarySkill: finalQaProfile.primarySkill,

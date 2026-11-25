@@ -13,7 +13,7 @@
 - Generated Markdown checklist containing tasks, quality checkpoints and evidence metadata.
 - Local dev-server supervisor restricted to package scripts `dev`, `start` and `preview`.
 - Localhost-only browser navigation, responsive viewport inspection, screenshots, DOM overflow/out-of-bounds metrics, browser errors and interaction scenarios; conditional Three.js rendering/shader/lifecycle checkpoint.
-- Dual-theme (`light` / `dark`) visual & accessibility auditing (`localhost.audit_visual_a11y`) powered by `@axe-core/playwright` (`wcag22aa`), alpha-composited contrast guard, section polarity verification, typography/occlusion/target-size checks, `prefers-reduced-motion` check, and Playwright `ariaSnapshot`.
+- Dual-theme (`light` / `dark`) visual & accessibility auditing (`localhost_audit_visual_a11y`) powered by `@axe-core/playwright` (`wcag22aa`), alpha-composited contrast guard, section polarity verification, typography/occlusion/target-size checks, `prefers-reduced-motion` check, and Playwright `ariaSnapshot`.
 - Workspace path guard and explicit browser destructive-action opt-in.
 - Example host configuration for VS Code and Cursor, plus Claude Code setup instructions.
 
@@ -21,7 +21,7 @@
 
 - MCP does not create or run LLM subagents. The host must call its native agent delegation feature.
 - No LLM provider is selected. Planning and subagent reasoning are host-owned.
-- No automatic semantic screenshot vision model is bundled. The host's multimodal agent should inspect saved screenshots and any `incompleteContrast` items returned by `localhost.audit_visual_a11y`.
+- No automatic semantic screenshot vision model is bundled. The host's multimodal agent should inspect saved screenshots and any `incompleteContrast` items returned by `localhost_audit_visual_a11y`.
 - Chromium is the only Playwright browser adapter currently implemented.
 - The browser navigation guard is not a complete OS network sandbox. Browser subresources can still request external origins.
 - JSON state storage is single-MCP-process only. Multi-process usage needs a transactional database and distributed claim locking.
@@ -42,14 +42,14 @@
 3. Run `npm run check`.
 4. Configure the MCP host to launch `dist/src/index.js`.
 5. Set `CRAFTRIG_WORKSPACE_ROOT` to the target application root.
-6. Verify the server appears in the MCP host and run `craftrig.list_modules` and `craftrig.list_skills`.
+6. Verify the server appears in the MCP host and run `craftrig_list_modules` and `craftrig_list_skills`.
 7. Create a test plan, start the local dev server, then run responsive inspection against localhost.
 
 
 ## Follow-up patch: MCP optional input normalization
 
 - Added `src/interfaces/mcp/input-normalizers.ts` to translate Zod/MCP transport values into strict application/domain inputs by omitting undefined optional properties.
-- Updated `craftrig.create_execution_plan` to normalize `domains` and `maxRepairIterations` before calling `TaskService`.
-- Updated `localhost.run_interaction_scenario` to normalize optional action `value` and `timeoutMs` before calling the browser port.
+- Updated `craftrig_create_execution_plan` to normalize `domains` and `maxRepairIterations` before calling `TaskService`.
+- Updated `localhost_run_interaction_scenario` to normalize optional action `value` and `timeoutMs` before calling the browser port.
 - Added four regression tests covering absent and provided optional values.
 - Patch verification in the authoring environment: isolated TypeScript compilation with `strict` and `exactOptionalPropertyTypes` passed; 4 normalization tests passed; catalog validation passed. Full dependency-backed `npm run check` could not be rerun here because npm dependency installation timed out.

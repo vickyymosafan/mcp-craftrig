@@ -306,7 +306,7 @@ const QUESTION_BANK: readonly QuestionSpec[] = [
     ],
     multiSelect: false,
     recommendedDefault: 'WCAG 2.2 AA (kontras >= 4.5:1 teks normal, navigasi keyboard, focus ring jelas, prefers-reduced-motion)',
-    why: 'Menjadi ambang gate otomatis pada `localhost.audit_visual_a11y`.',
+    why: 'Menjadi ambang gate otomatis pada `localhost_audit_visual_a11y`.',
     required: false
   },
   // 10. Performance
@@ -383,7 +383,7 @@ const QUESTION_BANK: readonly QuestionSpec[] = [
     ],
     multiSelect: false,
     recommendedDefault: 'Full-Auto — kerjakan semua phase sampai selesai & lulus QA tanpa berhenti (deploy tetap minta izin)',
-    why: 'Menentukan perilaku loop `craftrig.autopilot_next` antar-phase.',
+    why: 'Menentukan perilaku loop `craftrig_autopilot_next` antar-phase.',
     required: true
   }
 ];
@@ -524,7 +524,7 @@ function buildLlmRelayPrompt(session: InterviewSession, questions: InterviewQues
   for (const q of questions) {
     lines.push(`- [${q.id}] ${q.question} (Default: ${q.recommendedDefault})`);
   }
-  lines.push(`Setelah user menjawab, panggil craftrig.answer_blueprint_questions dengan sessionId="${session.id}".`);
+  lines.push(`Setelah user menjawab, panggil craftrig_answer_blueprint_questions dengan sessionId="${session.id}".`);
   return lines.join('\n');
 }
 
@@ -683,7 +683,7 @@ export class BlueprintArchitectService {
       llmRelayPrompt: roundQuestions.length > 0 ? buildLlmRelayPrompt(session, roundQuestions) : null,
       lintIssues: [],
       blueprint: null,
-      nextAction: 'Present questions[] to the user (via host ask_question / form elicitation / chat) and submit answers via craftrig.answer_blueprint_questions.'
+      nextAction: 'Present questions[] to the user (via host ask_question / form elicitation / chat) and submit answers via craftrig_answer_blueprint_questions.'
     };
   }
 
@@ -757,7 +757,7 @@ export class BlueprintArchitectService {
         llmRelayPrompt: buildLlmRelayPrompt(session, roundQuestions),
         lintIssues: [],
         blueprint: null,
-        nextAction: `Ask round ${session.currentRound} questions (${roundQuestions.length} item(s)) and call craftrig.answer_blueprint_questions again.`
+        nextAction: `Ask round ${session.currentRound} questions (${roundQuestions.length} item(s)) and call craftrig_answer_blueprint_questions again.`
       };
     }
 
@@ -796,7 +796,7 @@ export class BlueprintArchitectService {
         llmRelayPrompt: followUps.length > 0 ? buildLlmRelayPrompt(session, followUps) : null,
         lintIssues,
         blueprint: null,
-        nextAction: 'Resolve blocking blueprint lint contradiction(s) with the user via craftrig.answer_blueprint_questions.'
+        nextAction: 'Resolve blocking blueprint lint contradiction(s) with the user via craftrig_answer_blueprint_questions.'
       };
     }
 
@@ -833,7 +833,7 @@ export class BlueprintArchitectService {
       llmRelayPrompt: null,
       lintIssues,
       blueprint,
-      nextAction: `Blueprint "${blueprint.title}" (${blueprint.id}) is ready with ${blueprint.phases.length} phases and ${blueprint.requirements.length} requirements. Ask user for quick approval, then call craftrig.ingest_blueprint with blueprintId="${blueprint.id}" and run craftrig.autopilot_next until done.`
+      nextAction: `Blueprint "${blueprint.title}" (${blueprint.id}) is ready with ${blueprint.phases.length} phases and ${blueprint.requirements.length} requirements. Ask user for quick approval, then call craftrig_ingest_blueprint with blueprintId="${blueprint.id}" and run craftrig_autopilot_next until done.`
     };
   }
 

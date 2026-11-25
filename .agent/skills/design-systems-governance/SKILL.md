@@ -17,6 +17,6 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 7. Record theme ownership, token deprecation, migration, and impact.
 8. Detect token drift and duplicated components.
 9. Promote patterns to shared components only when repetition and semantics justify it.
-10. Keep design-system changes reviewable and regression-tested across all enabled themes via `localhost.audit_visual_a11y`.
+10. Keep design-system changes reviewable and regression-tested across all enabled themes via `localhost_audit_visual_a11y`.
 
 Reference provenance: Extract DESIGN.md, Expo Design System, Theme Factory, Hue, UI UX Pro Max, Material UI Theming.

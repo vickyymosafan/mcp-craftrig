@@ -106,7 +106,7 @@ function validateVisualOrA11yCheckpointEvidence(dimension: string, attached: rea
 
   if (attached.every(ev => ev.kind === 'screenshot')) {
     throw new ValidationError(
-      `Cannot mark ${dimension} PASS using screenshot evidence alone; run localhost.audit_visual_a11y or attach verified contrast/a11y audit evidence.`
+      `Cannot mark ${dimension} PASS using screenshot evidence alone; run localhost_audit_visual_a11y or attach verified contrast/a11y audit evidence.`
     );
   }
 
@@ -119,7 +119,7 @@ function validateVisualOrA11yCheckpointEvidence(dimension: string, attached: rea
 
   if (visualA11yReports.length === 0 && nonVisualBrowserReports.length > 0) {
     throw new ValidationError(
-      `Cannot mark ${dimension} PASS using responsive/interaction browser reports alone; run localhost.audit_visual_a11y first.`
+      `Cannot mark ${dimension} PASS using responsive/interaction browser reports alone; run localhost_audit_visual_a11y first.`
     );
   }
 
@@ -394,7 +394,7 @@ export class TaskService {
       recommendedActions.push({
         type: 'evaluate_gate',
         priority: 'high',
-        message: 'All plan execution tasks are completed. Evaluate quality gate via craftrig.evaluate_quality_gate.'
+        message: 'All plan execution tasks are completed. Evaluate quality gate via craftrig_evaluate_quality_gate.'
       });
     }
 

@@ -197,7 +197,7 @@ Use targeted shader hooks for fabric Fresnel sheen, subtle GPU vertex drape, or 
 - **Damped Orbit & Camera Presets:** Use `OrbitControls` with `controls.enableDamping = true; controls.dampingFactor = 0.06;` (always calling `controls.update()` in the loop and `controls.dispose()` on cleanup). Provide smooth lerped camera presets (*Editorial Front*, *3/4 Profile*, *Detail/Seam*, *Back/Sole*) and optional *Inspect Layers* / material swatch switching.
 - **Cursor-Tracking Rim:** Gently modulate rim light position or subtle model yaw lerp (`+= (target - current) * 0.08`) on pointer hover while respecting `prefers-reduced-motion`.
 - **Mobile Gesture Protection:** Always set `touch-action: pan-y;` on the canvas element so horizontal 3D inspection does NOT block vertical page scrolling.
-- **Non-blocking UI Overlays & HUD Contrast:** UI HUD overlays over the 3D canvas must have `pointer-events: none;`, with interactive buttons explicitly set to `pointer-events: auto;`. Every badge, label, or button sitting over a WebGL `<canvas>` must carry an explicit surface-scoped scrim/backdrop (`bg` + `fg` + `border`) with $\ge 4.5:1$ contrast in all enabled color schemes (`light` and/or `dark`), verified via `localhost.audit_visual_a11y`.
+- **Non-blocking UI Overlays & HUD Contrast:** UI HUD overlays over the 3D canvas must have `pointer-events: none;`, with interactive buttons explicitly set to `pointer-events: auto;`. Every badge, label, or button sitting over a WebGL `<canvas>` must carry an explicit surface-scoped scrim/backdrop (`bg` + `fg` + `border`) with $\ge 4.5:1$ contrast in all enabled color schemes (`light` and/or `dark`), verified via `localhost_audit_visual_a11y`.
 
 ---
 
@@ -229,7 +229,7 @@ Never leak WebGL resources or waste mobile battery:
 ---
 
 ## Verification Evidence
-- **Visual Silhouette & Category Fidelity Check:** Inspect captured Playwright screenshots (`light` & `dark` via `localhost.inspect_responsive` / `localhost.audit_visual_a11y`) to verify every 3D card/scene matches its real domain object (e.g. sneakers show multi-part sole/vamp/laces, garments show sculpted volume/collar/seams/folds—never flat 2D cutouts), shows crisp line/bevel detail, and separates cleanly from the card background.
+- **Visual Silhouette & Category Fidelity Check:** Inspect captured Playwright screenshots (`light` & `dark` via `localhost_inspect_responsive` / `localhost_audit_visual_a11y`) to verify every 3D card/scene matches its real domain object (e.g. sneakers show multi-part sole/vamp/laces, garments show sculpted volume/collar/seams/folds—never flat 2D cutouts), shows crisp line/bevel detail, and separates cleanly from the card background.
 - **WebGL Context & Non-Blank Canvas Gate:** Confirm $\le 4$ active WebGL contexts per page (use `setScissor` for multi-card grids), zero blank/unrendered canvases, zero `THREE.WebGLProgram` / GLSL shader warnings, and zero WebGL context loss.
 - **Frame & GPU Budget:** Verify steady 60 FPS behavior, bounded draw calls ($\le 50$ per viewport scene, merging static sub-parts via `mergeGeometries` from `three/addons/utils/BufferGeometryUtils.js` when needed), and clean disposal.
 - **Zero Overflow & HUD Contrast:** Confirm `0px` horizontal overflow and $\ge 4.5:1$ HUD/badge contrast across all enabled color schemes.

@@ -82,7 +82,7 @@ Whether implementing crisp/warm Light surfaces, deep Obsidian Dark surfaces, or 
 ---
 
 ## Verification Evidence
-1. **0px Horizontal Overflow:** Verify via `localhost.inspect_responsive` across all 13 standard viewport profiles (320px–1920px).
-2. **Dual-Theme Visual & A11y Audit:** Run `localhost.audit_visual_a11y` across every enabled color scheme (`light` / `dark`) and verify 0 `axe-core` violations, 0 invisible/low-contrast elements, 0 occluded controls, and valid `reducedMotion` rendering.
+1. **0px Horizontal Overflow:** Verify via `localhost_inspect_responsive` across all 13 standard viewport profiles (320px–1920px).
+2. **Dual-Theme Visual & A11y Audit:** Run `localhost_audit_visual_a11y` across every enabled color scheme (`light` / `dark`) and verify 0 `axe-core` violations, 0 invisible/low-contrast elements, 0 occluded controls, and valid `reducedMotion` rendering.
 3. **Zero Console Errors:** Zero unhandled promise rejections or deprecated API warnings in browser inspector logs.
 4. **Evidence Artifacts:** Record full-page Light & Dark screenshots, ARIA snapshots, and JSON audit summaries under `.harness/evidence/`.

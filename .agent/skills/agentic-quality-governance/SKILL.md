@@ -14,5 +14,5 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 6. Test the harness behavior itself: delegation, tool choice, failure recovery, browser inspection, permissions, budgets, and evidence freshness.
 7. Detect verifier gaming and repeated structural churn:
    - Never pass `typography-color` or `accessibility` using `inspect_responsive` alone or a single-theme screenshot when `light-and-dark` / `system-auto` is enabled.
-   - Require `localhost.audit_visual_a11y` evidence covering all user-selected color schemes (`light` and/or `dark`) and inspect the smallest micro-UI elements (badges, eyebrow labels, captions, muted text, placeholders, and inverted contrast bands) in every section.
+   - Require `localhost_audit_visual_a11y` evidence covering all user-selected color schemes (`light` and/or `dark`) and inspect the smallest micro-UI elements (badges, eyebrow labels, captions, muted text, placeholders, and inverted contrast bands) in every section.
 8. Report capability gaps honestly; do not silently mark unsupported checks as passed.

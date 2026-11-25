@@ -90,7 +90,7 @@ export const SKILL_ROUTING_RULES: readonly SkillRoutingRule[] = [
     domains: ['responsive', 'frontend'],
     alwaysIfUi: true,
     deterministicOnlyUnlessFailure: true,
-    reasonWhenSkipped: 'Handled by deterministic localhost.inspect_responsive (0 LLM tokens); subagent spawned only on defect.'
+    reasonWhenSkipped: 'Handled by deterministic localhost_inspect_responsive (0 LLM tokens); subagent spawned only on defect.'
   },
   {
     skill: 'ui-layout-repair',
@@ -104,14 +104,14 @@ export const SKILL_ROUTING_RULES: readonly SkillRoutingRule[] = [
     domains: ['frontend'],
     alwaysIfUi: true,
     deterministicOnlyUnlessFailure: true,
-    reasonWhenSkipped: 'Handled by deterministic localhost.run_interaction_scenario (0 LLM tokens); subagent spawned only on defect.'
+    reasonWhenSkipped: 'Handled by deterministic localhost_run_interaction_scenario (0 LLM tokens); subagent spawned only on defect.'
   },
   {
     skill: 'accessibility-qa',
     domains: ['frontend', 'design'],
     alwaysIfUi: true,
     deterministicOnlyUnlessFailure: true,
-    reasonWhenSkipped: 'Handled by deterministic localhost.audit_visual_a11y (0 LLM tokens); subagent spawned only on contrast/axe violation.'
+    reasonWhenSkipped: 'Handled by deterministic localhost_audit_visual_a11y (0 LLM tokens); subagent spawned only on contrast/axe violation.'
   },
   {
     skill: 'performance-qa',

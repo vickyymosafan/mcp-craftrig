@@ -18,4 +18,4 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 8. Never communicate status using color alone.
 9. Test gradients, overlays, opacity, badges/pills, placeholders, charts, disabled states, focus rings, selection, and HUDs over images or WebGL/3D canvases.
 10. Keep the project palette free of pink by default (follow user choice if explicitly requested). Preferred families: charcoal, black, gray, white, navy, blue, sage, earthy green, brown, cream; lime/orange as justified accents.
-11. Do not call a palette accessible until all enabled schemes (`light` and/or `dark`) are measured via `localhost.audit_visual_a11y` (0 `violations`, and every `incomplete` contrast item manually/pixel-verified) and evidence is recorded.
+11. Do not call a palette accessible until all enabled schemes (`light` and/or `dark`) are measured via `localhost_audit_visual_a11y` (0 `violations`, and every `incomplete` contrast item manually/pixel-verified) and evidence is recorded.

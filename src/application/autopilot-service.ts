@@ -326,7 +326,7 @@ export class AutopilotService {
           gateStatus: null,
           traceability,
           telemetry: plan.telemetry ?? null,
-          instructions: 'Present the completed phase summary to the user. Once approved, call craftrig.autopilot_next with approvePhaseId.'
+          instructions: 'Present the completed phase summary to the user. Once approved, call craftrig_autopilot_next with approvePhaseId.'
         };
       }
     }
@@ -346,9 +346,9 @@ export class AutopilotService {
         phaseId: t.phaseId ?? null,
         phaseName: t.phaseName ?? null,
         suggestedTools: [
-          'localhost.ensure_dev_server',
-          'localhost.inspect_responsive',
-          'localhost.audit_visual_a11y'
+          'localhost_ensure_dev_server',
+          'localhost_inspect_responsive',
+          'localhost_audit_visual_a11y'
         ],
         routes,
         colorSchemes: schemes,
@@ -412,7 +412,7 @@ export class AutopilotService {
         gateStatus: null,
         traceability,
         telemetry: plan.telemetry ?? null,
-        instructions: `Call craftrig.claim_ready_batch for these ${dispatchWave.length} disjoint task(s), dispatch each mode="subagent" task in parallel to a host subagent reading ONLY its packetUri and primarySkill (do not load skipped skills), complete_task with structured handoff + evidence, then call craftrig.autopilot_next.`
+        instructions: `Call craftrig_claim_ready_batch for these ${dispatchWave.length} disjoint task(s), dispatch each mode="subagent" task in parallel to a host subagent reading ONLY its packetUri and primarySkill (do not load skipped skills), complete_task with structured handoff + evidence, then call craftrig_autopilot_next.`
       };
     }
 
@@ -449,7 +449,7 @@ export class AutopilotService {
         gateStatus: { status: gate.status, missing: gate.missing, failed: gate.failed },
         traceability,
         telemetry: plan.telemetry ?? null,
-        instructions: 'All phases, requirements, and quality checkpoints PASSED with evidence. Present the traceability matrix, telemetry report, and release handoff to the user. Optionally call craftrig.archive_plan to compress state and reclaim disk. Never deploy without explicit user authorization.'
+        instructions: 'All phases, requirements, and quality checkpoints PASSED with evidence. Present the traceability matrix, telemetry report, and release handoff to the user. Optionally call craftrig_archive_plan to compress state and reclaim disk. Never deploy without explicit user authorization.'
       };
     }
 
@@ -465,7 +465,7 @@ export class AutopilotService {
       gateStatus: { status: gate.status, missing: gate.missing, failed: gate.failed },
       traceability,
       telemetry: plan.telemetry ?? null,
-      instructions: `All execution tasks completed, but quality gate is blocked by: ${[...gate.missing, ...gate.failed].join(', ')}. Attach verified evidence via craftrig.update_quality_checkpoint and call autopilot_next.`
+      instructions: `All execution tasks completed, but quality gate is blocked by: ${[...gate.missing, ...gate.failed].join(', ')}. Attach verified evidence via craftrig_update_quality_checkpoint and call autopilot_next.`
     };
   }
 

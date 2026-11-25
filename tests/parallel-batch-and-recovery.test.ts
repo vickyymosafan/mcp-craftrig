@@ -211,25 +211,28 @@ test('MCP server exposes claim_ready_batch, heartbeat_task, and resource templat
     });
 
     const registeredTools = (server as any)._registeredTools;
-    assert.ok(registeredTools['craftrig.claim_ready_batch'], 'craftrig.claim_ready_batch must be registered');
+    for (const toolName of Object.keys(registeredTools)) {
+      assert.match(toolName, /^[a-zA-Z0-9_-]{1,50}$/, `Tool name "${toolName}" must satisfy host identifier regex ^[a-zA-Z0-9_-]{1,64}$ with mcp_craftrig_ prefix`);
+    }
+    assert.ok(registeredTools['craftrig_claim_ready_batch'], 'craftrig_claim_ready_batch must be registered');
     assert.equal(registeredTools['harness.claim_ready_batch'], undefined, 'Legacy harness.* duplicate tools must not be registered');
-    assert.ok(registeredTools['craftrig.heartbeat_task'], 'craftrig.heartbeat_task must be registered');
-    assert.ok(registeredTools['localhost.ensure_dev_server'], 'localhost.ensure_dev_server must be registered');
+    assert.ok(registeredTools['craftrig_heartbeat_task'], 'craftrig_heartbeat_task must be registered');
+    assert.ok(registeredTools['localhost_ensure_dev_server'], 'localhost_ensure_dev_server must be registered');
 
     // Verify tool annotations
-    assert.deepEqual(registeredTools['craftrig.get_ready_tasks'].annotations, {
+    assert.deepEqual(registeredTools['craftrig_get_ready_tasks'].annotations, {
       readOnlyHint: true,
       idempotentHint: true,
       destructiveHint: false
     });
-    assert.deepEqual(registeredTools['craftrig.reopen_task'].annotations, {
+    assert.deepEqual(registeredTools['craftrig_reopen_task'].annotations, {
       readOnlyHint: false,
       idempotentHint: false,
       destructiveHint: true
     });
 
     // Test ensure_dev_server tool handler
-    const ensureHandler = registeredTools['localhost.ensure_dev_server'].handler;
+    const ensureHandler = registeredTools['localhost_ensure_dev_server'].handler;
     const ensureResult = await ensureHandler({ packageManager: 'npm', script: 'dev' });
     const ensureParsed = JSON.parse(ensureResult.content[0].text);
     assert.equal(ensureParsed.reused, true);

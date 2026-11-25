@@ -81,17 +81,17 @@ function errorResult(error: unknown, recoveryHint?: string) {
   if (!hint && error instanceof Error) {
     if (error.name === 'ConflictError') {
       if (error.message.includes('dependencies are not complete')) {
-        hint = 'Use craftrig.get_ready_tasks to find tasks whose dependencies are already satisfied.';
+        hint = 'Use craftrig_get_ready_tasks to find tasks whose dependencies are already satisfied.';
       } else if (error.message.includes('File ownership conflict')) {
-        hint = 'Use craftrig.list_file_locks to inspect active locks, wait for the conflicting task, or claim disjoint subpaths.';
+        hint = 'Use craftrig_list_file_locks to inspect active locks, wait for the conflicting task, or claim disjoint subpaths.';
       } else if (error.message.includes('Repair budget exhausted')) {
         hint = 'Escalate to human review; do not continue automatic repair loops without authorization.';
       }
     } else if (error.name === 'NotFoundError') {
-      hint = 'Verify the UUID using craftrig.get_execution_plan or check the active plan ID.';
+      hint = 'Verify the UUID using craftrig_get_execution_plan or check the active plan ID.';
     } else if (error.name === 'ValidationError') {
       if (error.message.includes('requires at least one evidence')) {
-        hint = 'Record evidence first using craftrig.record_evidence before completing this task.';
+        hint = 'Record evidence first using craftrig_record_evidence before completing this task.';
       } else if (error.message.includes('A PASS checkpoint requires evidence')) {
         hint = 'Attach valid plan-scoped evidence IDs when marking a quality checkpoint as PASS.';
       }
@@ -123,7 +123,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     },
     handler: (input: z.infer<T>, ctx?: unknown) => Promise<any>
   ) {
-    (server.registerTool as any)(`craftrig.${name}`, config, handler);
+    (server.registerTool as any)(`craftrig_${name}`, config, handler);
   }
 
   registerToolWithAlias('start_blueprint_interview', {
@@ -497,49 +497,49 @@ export function createMcpServer(deps: Dependencies): McpServer {
     inputSchema: z.object({})
   }, async () => { try { return result(await deps.skillRegistry.list()); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.discover_routes', {
+  server.registerTool('localhost_discover_routes', {
     description: 'Open a localhost entry route and discover same-origin anchor routes. Supplement this with source-router inspection because hidden, authenticated, or programmatic routes may not be linked from the page.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs) })
   }, async ({ baseUrl, timeoutMs }) => { try { return result(await deps.inspector.discoverRoutes(baseUrl, timeoutMs)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.wait_for_ready', {
+  server.registerTool('localhost_wait_for_ready', {
     description: 'Poll a loopback URL until the development site responds. Only localhost/127.0.0.1/::1 URLs are accepted.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ url: z.string().url(), timeoutMs: z.number().int().min(1000).max(120000).default(Math.max(30000, deps.browserTimeoutMs)) })
   }, async ({ url, timeoutMs }) => { try { return result(await waitForLocalUrl(url, timeoutMs)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.start_dev_server', {
+  server.registerTool('localhost_start_dev_server', {
     description: 'Start an allowlisted package.json dev/start/preview script inside the configured workspace. Does not run arbitrary shell commands.',
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).default('npm'), script: z.enum(['dev', 'start', 'preview']).default('dev') })
   }, async ({ packageManager, script }) => { try { return result(await deps.devServer.start(packageManager, script)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.ensure_dev_server', {
+  server.registerTool('localhost_ensure_dev_server', {
     description: 'Idempotently ensure a development server is running for an allowlisted package.json script. Reuses existing active process if already running without port collisions.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).default('npm'), script: z.enum(['dev', 'start', 'preview']).default('dev') })
   }, async ({ packageManager, script }) => { try { return result(await deps.devServer.ensure(packageManager, script)); } catch (error) { return errorResult(error); } });
 
-  (server.registerTool as any)('craftrig.ensure_dev_server', {
+  (server.registerTool as any)('craftrig_ensure_dev_server', {
     description: 'Idempotently ensure a development server is running for an allowlisted package.json script.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).default('npm'), script: z.enum(['dev', 'start', 'preview']).default('dev') })
   }, async ({ packageManager, script }: any) => { try { return result(await deps.devServer.ensure(packageManager, script)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.get_server_status', {
+  server.registerTool('localhost_get_server_status', {
     description: 'Read status and bounded logs for a development server started by this MCP process.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ processId: z.string().uuid() })
   }, async ({ processId }) => { try { return result(await deps.devServer.status(processId)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.stop_dev_server', {
+  server.registerTool('localhost_stop_dev_server', {
     description: 'Stop only a development server process started and tracked by this MCP process.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
     inputSchema: z.object({ processId: z.string().uuid() })
   }, async ({ processId }) => { try { return result(await deps.devServer.stop(processId)); } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.inspect_responsive', {
+  server.registerTool('localhost_inspect_responsive', {
     description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect lean JPEG screenshots (failures-only by default, SHA-256 deduplicated), DOM overflow metrics + metricsHash, console/page/network errors, and a JSON report. This is the responsive-first browser QA tool.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), routes: z.array(z.string()).default(['/']), viewports: z.array(viewportSchema).optional(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowedOverflowSelectors: z.array(z.string()).default([]), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('responsive-qa-agent') })
@@ -554,7 +554,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result({ ...report, evidenceId: evidence.id, nextAction: report.overallStatus === 'pass' ? 'Record responsive checkpoint as PASS with this evidence ID, then continue to layout inspection.' : 'Diagnose failed route/viewport cases, repair source code, then rerun this tool. Do not mark responsive PASS.' });
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.run_interaction_scenario', {
+  server.registerTool('localhost_run_interaction_scenario', {
     description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. Potentially destructive selectors are blocked unless allowRiskyActions is explicitly true for an isolated test environment.',
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), route: z.string().default('/'), actions: z.array(actionSchema).min(1).max(100), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowRiskyActions: z.boolean().default(false), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('functional-qa-agent') })
@@ -565,7 +565,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     return result({ ...report, evidenceId: evidence.id });
   } catch (error) { return errorResult(error); } });
 
-  server.registerTool('localhost.audit_visual_a11y', {
+  server.registerTool('localhost_audit_visual_a11y', {
     description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost. Captures deduplicated JPEG screenshots on failures-only by default to save disk.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({
@@ -634,7 +634,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
       evidenceId: evidence.id,
       nextAction: report.overallStatus === 'pass'
         ? 'Review any incompleteContrast items over gradients/canvases, then use this evidence ID for typography-color and accessibility checkpoints.'
-        : 'Fix every contrast, polarity, axe, typography, occlusion, or reduced-motion defect and rerun localhost.audit_visual_a11y. Do not pass checkpoints yet.'
+        : 'Fix every contrast, polarity, axe, typography, occlusion, or reduced-motion defect and rerun localhost_audit_visual_a11y. Do not pass checkpoints yet.'
     });
   } catch (error) { return errorResult(error); } });
 
@@ -732,7 +732,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     title: 'Principal Orchestrator Workflow',
     description: 'Plan and coordinate a project task using parallel subagents, Skills, MCP tools and independent verification.',
     argsSchema: z.object({ request: z.string().min(10), projectRoot: z.string().optional() })
-  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig.create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig.acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
+  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig_create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig_acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
 
   server.registerPrompt('craftrig-autopilot', {
     title: 'Craftrig Full-Blueprint Autopilot',
@@ -754,12 +754,12 @@ export function createMcpServer(deps: Dependencies): McpServer {
           '',
           'OPERATING LOOP (DO NOT STOP AFTER PHASE 1 OR LANDING PAGE — FINISH EVERY PHASE):',
           hasBlueprint
-            ? '1. Call craftrig.ingest_blueprint with the supplied markdown blueprint.'
-            : `1. No blueprint yet: call craftrig.start_blueprint_interview (mode="${interviewMode}"), relay questions[] to the user cleanly (using host interactive question UI if available), submit answers via craftrig.answer_blueprint_questions until blueprint is generated, get quick user approval, then call craftrig.ingest_blueprint.`,
-          '2. Loop craftrig.autopilot_next(planId):',
+            ? '1. Call craftrig_ingest_blueprint with the supplied markdown blueprint.'
+            : `1. No blueprint yet: call craftrig_start_blueprint_interview (mode="${interviewMode}"), relay questions[] to the user cleanly (using host interactive question UI if available), submit answers via craftrig_answer_blueprint_questions until blueprint is generated, get quick user approval, then call craftrig_ingest_blueprint.`,
+          '2. Loop craftrig_autopilot_next(planId):',
           '   - If state === "verify": run deterministicChecks directly with MCP/CLI tools (0 subagent LLM tokens!). If all pass, record evidence, update quality checkpoints, complete_task, and continue.',
-          '   - If state === "dispatch" or "repair": call craftrig.claim_ready_batch for dispatchWave, spawn parallel host subagents ONLY for mode="subagent" tasks. Each subagent MUST read ONLY its packetUri and its single primarySkill file — NEVER load skipped skills!',
-          '   - Require every subagent to return structured handoff (summary, changedFiles, contracts, decisions, testsRun) and pass it to craftrig.complete_task.',
+          '   - If state === "dispatch" or "repair": call craftrig_claim_ready_batch for dispatchWave, spawn parallel host subagents ONLY for mode="subagent" tasks. Each subagent MUST read ONLY its packetUri and its single primarySkill file — NEVER load skipped skills!',
+          '   - Require every subagent to return structured handoff (summary, changedFiles, contracts, decisions, testsRun) and pass it to craftrig_complete_task.',
           '   - If state === "needs_human": pause and present humanPrompt to the user.',
           '   - Repeat across ALL phases until state === "done".',
           '3. At state === "done": present REQ-ID traceability matrix + skill/token telemetry. Never deploy without explicit user authorization.',

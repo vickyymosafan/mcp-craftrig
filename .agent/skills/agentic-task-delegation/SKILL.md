@@ -12,16 +12,16 @@ Represent work as a directed acyclic graph. A task may start only when all depen
 ## Delegation process
 1. Read the task and project context, or fetch the task packet via `craftrig://plans/{planId}/tasks/{taskId}/packet`.
 2. Decompose by independently verifiable outcomes, not by arbitrary file count.
-3. Identify dependencies and shared-file conflicts (`craftrig.list_file_locks`).
-4. Assign one owner role per task and lock explicit write ownership via `craftrig.claim_task` (`ownedPaths`), `craftrig.claim_ready_batch`, or `craftrig.acquire_file_locks`.
+3. Identify dependencies and shared-file conflicts (`craftrig_list_file_locks`).
+4. Assign one owner role per task and lock explicit write ownership via `craftrig_claim_task` (`ownedPaths`), `craftrig_claim_ready_batch`, or `craftrig_acquire_file_locks`.
 5. Group independent tasks with disjoint owned paths into parallel batches (e.g. `qa-wave` fan-out after integration).
 6. Send each subagent a bounded context packet listing its locked paths and lease duration.
-7. Long-running subagents send periodic heartbeats via `craftrig.heartbeat_task` to prevent lease expiration.
-8. Collect structured results and evidence; locks release automatically on `craftrig.complete_task` or `craftrig.reopen_task` (or explicitly via `craftrig.release_file_locks`).
+7. Long-running subagents send periodic heartbeats via `craftrig_heartbeat_task` to prevent lease expiration.
+8. Collect structured results and evidence; locks release automatically on `craftrig_complete_task` or `craftrig_reopen_task` (or explicitly via `craftrig_release_file_locks`).
 9. Run integration and regression checks.
 
 ## Parallel QA Wave
-Following the `integrate-and-build` milestone, UI tasks fan out into a parallel QA wave (`parallelGroup: 'qa-wave'`). The Orchestrator can batch-claim (`craftrig.claim_ready_batch`) or spawn simultaneous subagents for:
+Following the `integrate-and-build` milestone, UI tasks fan out into a parallel QA wave (`parallelGroup: 'qa-wave'`). The Orchestrator can batch-claim (`craftrig_claim_ready_batch`) or spawn simultaneous subagents for:
 - Responsive Viewport QA
 - Layout Defect QA
 - Functional Interaction QA

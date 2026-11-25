@@ -230,21 +230,21 @@ test('MCP server exposes claim_task ownedPaths and file-lock tools end-to-end', 
     });
     await clientTransport.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
 
-    const createdRes = await callTool('craftrig.create_execution_plan', {
+    const createdRes = await callTool('craftrig_create_execution_plan', {
       title: 'Locking check',
       request: 'Build backend service with strict path locking'
     });
     const created = JSON.parse(createdRes.content[0]!.text) as { plan: { id: string }; tasks: Array<{ id: string }> };
     const taskId = created.tasks[0]!.id;
 
-    const escapeAttempt = await callTool('craftrig.claim_task', {
+    const escapeAttempt = await callTool('craftrig_claim_task', {
       taskId,
       agentId: 'mcp-agent-escape',
       ownedPaths: ['../outside.ts']
     });
     assert.equal(escapeAttempt.isError, true);
 
-    const claimRes = await callTool('craftrig.claim_task', {
+    const claimRes = await callTool('craftrig_claim_task', {
       taskId,
       agentId: 'mcp-agent-1',
       ownedPaths: ['src/index.ts']
@@ -253,30 +253,30 @@ test('MCP server exposes claim_task ownedPaths and file-lock tools end-to-end', 
     const claimedTask = JSON.parse(claimRes.content[0]!.text) as { ownedPaths: string[] };
     assert.deepEqual(claimedTask.ownedPaths, ['src/index.ts']);
 
-    const acquireRes = await callTool('craftrig.acquire_file_locks', {
+    const acquireRes = await callTool('craftrig_acquire_file_locks', {
       taskId,
       agentId: 'mcp-agent-1',
       paths: ['src/server.ts']
     });
     assert.equal(acquireRes.isError, undefined);
 
-    const listRes = await callTool('craftrig.list_file_locks', { planId: created.plan.id });
+    const listRes = await callTool('craftrig_list_file_locks', { planId: created.plan.id });
     const locks = JSON.parse(listRes.content[0]!.text) as Array<{ path: string }>;
     assert.deepEqual(locks.map(l => l.path), ['src/index.ts', 'src/server.ts']);
 
-    const badRelease = await callTool('craftrig.release_file_locks', {
+    const badRelease = await callTool('craftrig_release_file_locks', {
       taskId,
       agentId: 'other-agent',
       paths: ['src/index.ts']
     });
     assert.equal(badRelease.isError, true);
 
-    const goodRelease = await callTool('craftrig.release_file_locks', {
+    const goodRelease = await callTool('craftrig_release_file_locks', {
       taskId,
       agentId: 'mcp-agent-1'
     });
     assert.equal(goodRelease.isError, undefined);
-    const afterLocks = JSON.parse((await callTool('craftrig.list_file_locks', { planId: created.plan.id })).content[0]!.text) as unknown[];
+    const afterLocks = JSON.parse((await callTool('craftrig_list_file_locks', { planId: created.plan.id })).content[0]!.text) as unknown[];
     assert.equal(afterLocks.length, 0);
 
     await clientTransport.close();

@@ -19,7 +19,7 @@ Before writing any UI, let the user shape the result. Do not impose the house st
 4. Write every decision into the project's `DESIGN.md` (copy from `docs/templates/project-contracts/DESIGN.md`) under a `## User choices` section, then derive tokens (CSS variables using `light-dark()` + `color-scheme` or surface-scoped variables) from it. Later work must read that file, not re-ask.
 5. If a choice conflicts with accessibility (for example low-contrast palette against `wcag-aa`), keep the choice's intent, adjust shades until contrast passes, and tell the user what changed.
 6. The "no pink" rule below is only a default. If the user picks `rose-pink` or `custom-hex` with pink, follow the user.
-7. After building, verify every enabled theme mode (`light` and/or `dark`) with `localhost.inspect_responsive` and `localhost.audit_visual_a11y`, show screenshots to the user, and offer to swap any single choice, then re-run affected checks.
+7. After building, verify every enabled theme mode (`light` and/or `dark`) with `localhost_inspect_responsive` and `localhost_audit_visual_a11y`, show screenshots to the user, and offer to swap any single choice, then re-run affected checks.
 
 ## Core Philosophy: Distinction between Slop vs. High Craft (Dual-Polarity)
 The mandate to "avoid AI slop" does **NOT** mean designing flat, boring, sterile gray websites—and it does **NOT** mean forcing dark mode everywhere. It means rejecting cheap, unearned tropes and replacing them with **intentional, high-craft digital artistry** calibrated for the user's chosen polarity (Light, Dark, or both):

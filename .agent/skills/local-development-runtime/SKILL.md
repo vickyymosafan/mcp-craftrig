@@ -7,7 +7,7 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 # Local Development Runtime
 
 1. Confirm the configured workspace root and inspect `package.json`.
-2. Start only an existing allowlisted `dev`, `start`, or `preview` script through `localhost.start_dev_server`.
+2. Start only an existing allowlisted `dev`, `start`, or `preview` script through `localhost_start_dev_server`.
 3. Never construct arbitrary shell commands or run untrusted install/postinstall actions.
 4. Read process status and bounded logs; determine the actual local URL from project output or user-provided configuration.
 5. Confirm readiness before browser navigation.

@@ -48,4 +48,4 @@ Check the host documentation for its exact Skill discovery path before copying.
 
 ## True multi-agent execution
 
-The MCP server persists tasks and gates; it does not spawn LLM sessions. The principal agent must use the host's native subagent feature to run tasks returned by `craftrig.get_ready_tasks`. If no native delegation API is available, perform tasks sequentially through the same contracts. Do not claim parallel subagents ran unless the host actually spawned them.
+The MCP server persists tasks and gates; it does not spawn LLM sessions. The principal agent must use the host's native subagent feature to run tasks returned by `craftrig_get_ready_tasks`. If no native delegation API is available, perform tasks sequentially through the same contracts. Do not claim parallel subagents ran unless the host actually spawned them.
