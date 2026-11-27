@@ -1,13 +1,18 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { GitChangesReaderPort, WorkingTreeChanges } from '../../domain/ports.js';
+import type { GitChangesReaderPort, GitFileChangeEntry, WorkingTreeChanges } from '../../domain/ports.js';
 
 const execFileAsync = promisify(execFile);
 
-export function parseGitPorcelainOutput(stdout: string): string[] {
-  const files: string[] = [];
+const UNMERGED_STATUSES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
+export function parseGitPorcelainEntries(stdout: string): GitFileChangeEntry[] {
+  const byPath = new Map<string, GitFileChangeEntry>();
   for (const rawLine of stdout.split(/\r?\n/)) {
     if (rawLine.length < 4) continue;
+    const rawStatus = rawLine.slice(0, 2);
+    const indexStatus = rawLine[0] ?? ' ';
+    const workingTreeStatus = rawLine[1] ?? ' ';
     let filePath = rawLine.slice(3).trim();
     if (!filePath) continue;
     const renameIdx = filePath.indexOf(' -> ');
@@ -18,9 +23,20 @@ export function parseGitPorcelainOutput(stdout: string): string[] {
       filePath = filePath.slice(1, -1);
     }
     const normalized = filePath.replace(/\\/g, '/');
-    if (normalized) files.push(normalized);
+    if (!normalized) continue;
+    byPath.set(normalized.toLowerCase(), {
+      path: normalized,
+      indexStatus,
+      workingTreeStatus,
+      rawStatus,
+      isUnmergedConflict: UNMERGED_STATUSES.has(rawStatus)
+    });
   }
-  return [...new Set(files)];
+  return [...byPath.values()];
+}
+
+export function parseGitPorcelainOutput(stdout: string): string[] {
+  return parseGitPorcelainEntries(stdout).map(entry => entry.path);
 }
 
 export class GitChangesReader implements GitChangesReaderPort {
@@ -33,14 +49,17 @@ export class GitChangesReader implements GitChangesReaderPort {
         ['status', '--porcelain', '-uall'],
         { cwd: this.workspaceRoot, timeout: 3000, windowsHide: true }
       );
+      const entries = parseGitPorcelainEntries(stdout);
       return {
         isGitRepo: true,
-        changedFiles: parseGitPorcelainOutput(stdout)
+        changedFiles: entries.map(e => e.path),
+        entries
       };
     } catch {
       return {
         isGitRepo: false,
-        changedFiles: []
+        changedFiles: [],
+        entries: []
       };
     }
   }

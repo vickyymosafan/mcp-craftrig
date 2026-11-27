@@ -11,6 +11,7 @@ import type { GitChangesReaderPort } from '../domain/ports.js';
 import { pathsOverlap } from '../domain/file-ownership.js';
 import type { TaskService } from './task-service.js';
 import { buildPlanConventionalCommit } from './commit-message-builder.js';
+import type { FinalFileSyncAudit } from './final-file-sync-audit.js';
 import { estimateTokens, skillPathFor } from './skill-router.js';
 
 export type AutopilotState = 'dispatch' | 'verify' | 'repair' | 'waiting' | 'needs_human' | 'done';
@@ -65,6 +66,7 @@ export interface AutopilotNextResult {
   traceability: RequirementTraceabilityEntry[];
   telemetry: PlanTelemetry | null;
   conventionalCommit?: ConventionalCommitArtifact | null;
+  fileSyncAudit?: FinalFileSyncAudit | null;
   instructions: string;
 }
 
@@ -455,6 +457,7 @@ export class AutopilotService {
     if (gate.status === 'pass') {
       const snapshot = await this.taskService.getPlan(planId);
       const conventionalCommit = gate.conventionalCommit ?? await buildPlanConventionalCommit(snapshot, traceability, this.gitChangesReader);
+      const fileSyncAudit = gate.fileSyncAudit ?? await this.taskService.buildFinalFileSyncAudit(planId, conventionalCommit.changedFiles);
       return {
         planId,
         state: 'done',
@@ -468,7 +471,8 @@ export class AutopilotService {
         traceability,
         telemetry: plan.telemetry ?? null,
         conventionalCommit,
-        instructions: 'All phases, requirements, and quality checkpoints PASSED with evidence. MANDATORY: Include conventionalCommit.fullMessage (Conventional Commits 1.0.0) in your final output to summarize all changes — NEVER run git push without explicit user authorization. Present the traceability matrix, telemetry report, and release handoff to the user. Optionally call craftrig_archive_plan to compress state and reclaim disk.'
+        fileSyncAudit,
+        instructions: 'All phases, requirements, and quality checkpoints PASSED with evidence. MANDATORY: (1) Report fileSyncAudit (verified files on disk + warn the user NOT to click Overwrite on stale/unsaved editor tabs; close with Don\'t Save or run File: Revert File) and (2) Include conventionalCommit.fullMessage (Conventional Commits 1.0.0) in your final output — NEVER run git push without explicit user authorization. Present the traceability matrix, telemetry report, and release handoff to the user. Optionally call craftrig_archive_plan to compress state and reclaim disk.'
       };
     }
 

@@ -160,15 +160,18 @@ test('TaskService.evaluateGate emits conventionalCommit on PASS only and craftri
     assert.match(standalone.header, /^feat: add git working tree inspection$/);
     assert.ok(standalone.changedFiles.includes('src-change.ts'));
     assert.doesNotMatch(standalone.suggestedCommand, /\bgit\s+push\b/i);
-    assert.ok(standaloneRes.content[1]?.text.includes('[FINAL OUTPUT REQUIREMENT — NO PUSH]'));
+    assert.ok(standalone.fileSyncAudit, 'craftrig_prepare_commit_message must include auto fileSyncAudit');
+    assert.ok(standaloneRes.content[1]?.text.includes('[FINAL OUTPUT REQUIREMENT — AUTO FILE-SYNC AUDIT & NO PUSH]'));
 
-    // localhost_stop_dev_server also emits conventionalCommit + text notice (without push)
+    // localhost_stop_dev_server also emits conventionalCommit + fileSyncAudit + text notice (without push)
     const stopRes = await tools['localhost_stop_dev_server'].handler({ processId: '00000000-0000-0000-0000-000000000001' });
     const stopped = JSON.parse(stopRes.content[0].text);
     assert.ok(stopped.conventionalCommit, 'localhost_stop_dev_server must include conventionalCommit');
+    assert.ok(stopped.fileSyncAudit, 'localhost_stop_dev_server must include auto fileSyncAudit');
     assert.equal(stopped.conventionalCommit.noPush, true);
     assert.ok(stopped.conventionalCommit.changedFiles.includes('src-change.ts'));
     assert.ok(stopRes.content[1]?.text.includes(stopped.conventionalCommit.fullMessage));
+    assert.ok(stopRes.content[1]?.text.includes('DO NOT click Overwrite'));
 
     // Gate blocked -> no conventionalCommit
     const memService = new TaskService(new MemoryRepository());

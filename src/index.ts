@@ -72,5 +72,6 @@ await serveStdio(() => createMcpServer({
   maxParallelTasks: runtimeConfig.maxParallelTasks,
   browserTimeoutMs: runtimeConfig.browserTimeoutMs,
   evidenceQuotaBytes,
-  gitChangesReader
+  gitChangesReader,
+  fileFingerprinter
 }));

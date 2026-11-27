@@ -7,10 +7,11 @@ import type { TaskService } from '../../application/task-service.js';
 import type { BlueprintArchitectService } from '../../application/blueprint-architect.js';
 import { AutopilotService } from '../../application/autopilot-service.js';
 import { buildPlanConventionalCommit } from '../../application/commit-message-builder.js';
+import { buildFinalFileSyncAudit, type FinalFileSyncAudit } from '../../application/final-file-sync-audit.js';
 import { parseMarkdownBlueprint } from '../../application/blueprint-parser.js';
 import { archivePlanSnapshot, enforceEvidenceQuota } from '../../infrastructure/persistence/evidence-store.js';
 import { buildConventionalCommit } from '../../domain/conventional-commit.js';
-import type { BrowserInspectorPort, DevServerPort, GitChangesReaderPort } from '../../domain/ports.js';
+import type { BrowserInspectorPort, DevServerPort, FileFingerprinterPort, GitChangesReaderPort } from '../../domain/ports.js';
 import type { ProjectBlueprint } from '../../domain/blueprint.js';
 import type { WorkspaceGuard } from '../../infrastructure/security/workspace-guard.js';
 import type { FileSkillRegistry } from '../../infrastructure/skills/file-skill-registry.js';
@@ -46,6 +47,7 @@ interface Dependencies {
   browserTimeoutMs: number;
   evidenceQuotaBytes?: number;
   gitChangesReader?: GitChangesReaderPort;
+  fileFingerprinter?: FileFingerprinterPort;
 }
 
 const commitTypes = ['feat', 'fix', 'refactor', 'docs', 'test', 'build', 'ci', 'perf', 'style', 'chore'] as const;
@@ -91,19 +93,37 @@ function isRequestAborted(ctx: unknown): boolean {
 }
 
 const FINAL_OUTPUT_REQUIREMENT =
-  'MANDATORY: Include conventionalCommit.fullMessage (Conventional Commits 1.0.0) in your final output to summarize all changes. Do NOT run git push without explicit user authorization.';
+  'MANDATORY: (1) Report fileSyncAudit (verified files on disk + warn NOT to click Overwrite on stale/unsaved editor tabs; close with Don\'t Save or run File: Revert File) and (2) Include conventionalCommit.fullMessage (Conventional Commits 1.0.0) in your final output. Do NOT run git push without explicit user authorization.';
 
 function result(value: unknown) {
   const content: Array<{ type: 'text'; text: string }> = [
     { type: 'text' as const, text: JSON.stringify(value) }
   ];
-  const record = value as { conventionalCommit?: { fullMessage?: string }; fullMessage?: string; noPush?: boolean } | null;
+  const record = value as {
+    conventionalCommit?: { fullMessage?: string };
+    fileSyncAudit?: FinalFileSyncAudit | null;
+    fullMessage?: string;
+    noPush?: boolean;
+  } | null;
   const commitMessage = record?.conventionalCommit?.fullMessage ?? (record?.noPush ? record?.fullMessage : undefined);
-  if (commitMessage) {
-    content.push({
-      type: 'text' as const,
-      text: `[FINAL OUTPUT REQUIREMENT — NO PUSH]\nInclude this Conventional Commit message in your final output (do NOT run git push):\n\`\`\`text\n${commitMessage}\n\`\`\``
-    });
+  const audit = record?.fileSyncAudit ?? null;
+  if (commitMessage || audit) {
+    const sections: string[] = ['[FINAL OUTPUT REQUIREMENT — AUTO FILE-SYNC AUDIT & NO PUSH]'];
+    if (audit) {
+      sections.push(`File-Sync Audit (risk=${audit.staleTabRisk}, checked=${audit.totalChecked}, issues=${audit.issuesCount}): ${audit.editorSyncGuidance}`);
+      if (audit.staleEditorTabFiles.length > 0) {
+        const fileList = audit.files
+          .filter(f => audit.staleEditorTabFiles.includes(f.path))
+          .slice(0, 12)
+          .map(f => `- ${f.path} (${f.status}, ${f.sizeBytes}B${f.sha256Short ? `, sha256:${f.sha256Short}` : ''})`)
+          .join('\n');
+        sections.push(`Updated files verified on disk (DO NOT click Overwrite if open in stale/unsaved editor tabs — close with Don't Save or run File: Revert File):\n${fileList}`);
+      }
+    }
+    if (commitMessage) {
+      sections.push(`Include this Conventional Commit message in your final output (do NOT run git push):\n\`\`\`text\n${commitMessage}\n\`\`\``);
+    }
+    content.push({ type: 'text' as const, text: sections.join('\n\n') });
   }
   return { content };
 }
@@ -147,7 +167,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     await Promise.all(paths.map(target => deps.guard.resolvePotentialPathInsideWorkspace(target)));
   };
 
-  async function buildToolCommitSummary(options: {
+  async function buildToolFinalBundle(options: {
     planId?: string | null;
     fallbackTitle: string;
     fallbackSummary: string;
@@ -155,18 +175,28 @@ export function createMcpServer(deps: Dependencies): McpServer {
     fallbackType?: 'feat' | 'fix' | 'chore' | 'test';
   }) {
     if (options.planId) {
-      return deps.taskService.buildConventionalCommit(options.planId);
+      const conventionalCommit = await deps.taskService.buildConventionalCommit(options.planId);
+      const fileSyncAudit = await deps.taskService.buildFinalFileSyncAudit(options.planId, conventionalCommit.changedFiles);
+      return { conventionalCommit, fileSyncAudit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT };
     }
     const workingTree = deps.gitChangesReader
       ? await deps.gitChangesReader.readWorkingTreeChanges().catch(() => ({ isGitRepo: false, changedFiles: [] }))
       : { isGitRepo: false, changedFiles: [] };
-    return buildConventionalCommit({
+    const conventionalCommit = buildConventionalCommit({
       title: options.fallbackTitle,
       summaryPoints: [options.fallbackSummary],
       changedFiles: workingTree.changedFiles,
       scope: options.fallbackScope,
       ...(workingTree.changedFiles.length === 0 && options.fallbackType ? { type: options.fallbackType } : {})
     });
+    const activeLocks = await deps.taskService.listFileLocks();
+    const fileSyncAudit = await buildFinalFileSyncAudit({
+      candidatePaths: conventionalCommit.changedFiles,
+      activeLocks,
+      ...(deps.gitChangesReader ? { gitChangesReader: deps.gitChangesReader } : {}),
+      ...(deps.fileFingerprinter ? { fileFingerprinter: deps.fileFingerprinter } : {})
+    });
+    return { conventionalCommit, fileSyncAudit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT };
   }
 
   function registerToolWithAlias<T extends z.ZodTypeAny>(
@@ -321,6 +351,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
       }
       const archiveDir = await deps.guard.ensureEvidenceDirectory(path.join('.craftrig', 'archive'));
       const conventionalCommit = await buildPlanConventionalCommit(snapshot, traceability, deps.gitChangesReader);
+      const fileSyncAudit = await deps.taskService.buildFinalFileSyncAudit(planId, conventionalCommit.changedFiles);
       const archiveResult = await archivePlanSnapshot(archiveDir, planId, {
         ...snapshot,
         evidence,
@@ -341,7 +372,8 @@ export function createMcpServer(deps: Dependencies): McpServer {
         purged,
         quotaResult,
         conventionalCommit,
-        finalOutputRequirement: 'MANDATORY: Include conventionalCommit.fullMessage in your final output to summarize the changes. Do NOT run git push without explicit user authorization.'
+        fileSyncAudit,
+        finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT
       });
     } catch (error) {
       return errorResult(error);
@@ -549,13 +581,18 @@ export function createMcpServer(deps: Dependencies): McpServer {
       }
 
       let hasCraftrigWatcherExclude = false;
+      let hasDangerousOverwriteSetting = false;
+      let hasAutoSave = false;
       try {
         const vscodeSettingsRaw = await readFile(path.join(deps.workspaceRoot, '.vscode', 'settings.json'), 'utf8');
         hasCraftrigWatcherExclude = /["']\*\*\/\.craftrig\/\*\*["']\s*:\s*true/.test(vscodeSettingsRaw);
+        hasDangerousOverwriteSetting = /["']files\.saveConflictResolution["']\s*:\s*["']overwriteFileOnDisk["']/.test(vscodeSettingsRaw);
+        hasAutoSave = /["']files\.autoSave["']\s*:\s*["'](afterDelay|onFocusChange|onWindowChange)["']/.test(vscodeSettingsRaw);
       } catch {
         hasCraftrigWatcherExclude = false;
       }
 
+      const fileSyncAudit = await deps.taskService.buildFinalFileSyncAudit(planId);
       const storageStats = await deps.taskService.getStorageStats();
       const gitState = deps.gitChangesReader
         ? await deps.gitChangesReader.readWorkingTreeChanges().catch(() => ({ isGitRepo: false, changedFiles: [] }))
@@ -565,21 +602,30 @@ export function createMcpServer(deps: Dependencies): McpServer {
       const invalidToolNames = registeredToolNames.filter(name => !/^[a-zA-Z0-9_-]{1,50}$/.test(name));
 
       const compareOverwriteRisk: 'none' | 'low' | 'high' =
-        driftedLocks.length > 0 || expiredLocks.length > 0
+        driftedLocks.length > 0 || expiredLocks.length > 0 || hasDangerousOverwriteSetting || fileSyncAudit.issuesCount > 0
           ? 'high'
-          : !hasCraftrigWatcherExclude
+          : (!hasCraftrigWatcherExclude || fileSyncAudit.staleEditorTabFiles.length > 0)
             ? 'low'
             : 'none';
 
       const recommendations: string[] = [];
+      if (hasDangerousOverwriteSetting) {
+        recommendations.push('CRITICAL: Remove `"files.saveConflictResolution": "overwriteFileOnDisk"` from `.vscode/settings.json`! It causes stale editor tabs to silently overwrite fresh agent edits on disk.');
+      }
       if (driftedLocks.length > 0) {
         recommendations.push(`Reload ${driftedLocks.length} externally modified file(s) before saving: ${driftedLocks.map(d => d.path).join(', ')}`);
       }
       if (expiredLocks.length > 0) {
         recommendations.push(`Run craftrig_recover_stale_locks to clear ${expiredLocks.length} expired lease lock(s).`);
       }
+      if (fileSyncAudit.staleEditorTabFiles.length > 0) {
+        recommendations.push(fileSyncAudit.editorSyncGuidance);
+      }
       if (!hasCraftrigWatcherExclude) {
         recommendations.push('Add `"files.watcherExclude": { "**/.craftrig/**": true }` to `.vscode/settings.json` to silence IDE watcher churn on Craftrig state/checklist/evidence files.');
+      }
+      if (!hasAutoSave) {
+        recommendations.push('Recommended: Enable `"files.autoSave": "afterDelay"` in IDE settings so editor buffers stay clean instead of turning stale when agents update files on disk.');
       }
 
       await emitLog(ctx, compareOverwriteRisk === 'high' ? 'warning' : 'info', {
@@ -597,9 +643,13 @@ export function createMcpServer(deps: Dependencies): McpServer {
           expiredCount: expiredLocks.length,
           driftedFiles: driftedLocks.map(d => ({ path: d.path, status: d.status, detail: d.detail }))
         },
+        fileSyncAudit,
         ideWatcherHygiene: {
           hasCraftrigWatcherExclude,
+          hasAutoSave,
+          hasDangerousOverwriteSetting,
           recommendedSettingsSnippet: {
+            'files.autoSave': 'afterDelay',
             'files.watcherExclude': { '**/.craftrig/**': true },
             'search.exclude': { '**/.craftrig/**': true }
           }
@@ -638,7 +688,8 @@ export function createMcpServer(deps: Dependencies): McpServer {
         const allCompleted = snapshot.tasks.length > 0 && snapshot.tasks.every(t => t.status === 'completed');
         if (allCompleted) {
           const conventionalCommit = await deps.taskService.buildConventionalCommit(task.planId);
-          return result({ task, checklistPath, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
+          const fileSyncAudit = await deps.taskService.buildFinalFileSyncAudit(task.planId, conventionalCommit.changedFiles);
+          return result({ task, checklistPath, conventionalCommit, fileSyncAudit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
         }
       }
       return result({ task, checklistPath });
@@ -687,9 +738,11 @@ export function createMcpServer(deps: Dependencies): McpServer {
           ...(input.summary !== undefined ? { summary: input.summary } : {}),
           ...(input.breakingChange !== undefined ? { breakingChange: input.breakingChange } : {})
         });
+        const fileSyncAudit = await deps.taskService.buildFinalFileSyncAudit(input.planId, commit.changedFiles);
         return result({
           ...commit,
-          finalOutputRequirement: 'MANDATORY: Include fullMessage in your final output. Do NOT run git push without explicit user authorization.'
+          fileSyncAudit,
+          finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT
         });
       }
 
@@ -708,10 +761,18 @@ export function createMcpServer(deps: Dependencies): McpServer {
         ...(input.scope !== undefined ? { scope: input.scope } : {}),
         ...(input.breakingChange !== undefined ? { breakingChange: input.breakingChange } : {})
       });
+      const activeLocks = await deps.taskService.listFileLocks();
+      const fileSyncAudit = await buildFinalFileSyncAudit({
+        candidatePaths: commit.changedFiles,
+        activeLocks,
+        ...(deps.gitChangesReader ? { gitChangesReader: deps.gitChangesReader } : {}),
+        ...(deps.fileFingerprinter ? { fileFingerprinter: deps.fileFingerprinter } : {})
+      });
       return result({
         ...commit,
         isGitRepo: workingTree.isGitRepo,
-        finalOutputRequirement: 'MANDATORY: Include fullMessage in your final output. Do NOT run git push without explicit user authorization.'
+        fileSyncAudit,
+        finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT
       });
     } catch (error) {
       return errorResult(error);
@@ -785,24 +846,24 @@ export function createMcpServer(deps: Dependencies): McpServer {
   }, async ({ processId }) => { try { return result(await deps.devServer.status(processId)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost_stop_dev_server', {
-    description: 'Stop only a development server process started and tracked by this MCP process. Emits a Conventional Commits 1.0.0 message (no push) for any workspace changes.',
+    description: 'Stop only a development server process started and tracked by this MCP process. Auto-runs final disk file-sync audit (stale-tab warning) and emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
     inputSchema: z.object({ processId: z.string().uuid() })
   }, async ({ processId }) => {
     try {
       const stopped = await deps.devServer.stop(processId);
-      const conventionalCommit = await buildToolCommitSummary({
+      const finalBundle = await buildToolFinalBundle({
         fallbackTitle: 'verify localhost runtime changes',
         fallbackSummary: 'Completed local dev server inspection and stopped tracked process',
         fallbackScope: 'localhost',
         fallbackType: 'chore'
       });
-      return result({ ...stopped, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
+      return result({ ...stopped, ...finalBundle });
     } catch (error) { return errorResult(error); }
   });
 
   server.registerTool('localhost_inspect_responsive', {
-    description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect lean JPEG screenshots (failures-only by default, SHA-256 deduplicated), DOM overflow metrics + metricsHash, console/page/network errors, and a JSON report. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
+    description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect lean JPEG screenshots (failures-only by default, SHA-256 deduplicated), DOM overflow metrics + metricsHash, console/page/network errors, and a JSON report. On PASS, auto-runs final disk file-sync audit and emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), routes: z.array(z.string()).default(['/']), viewports: z.array(viewportSchema).optional(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowedOverflowSelectors: z.array(z.string()).default([]), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('responsive-qa-agent') })
   }, async (input, ctx) => {
@@ -817,8 +878,8 @@ export function createMcpServer(deps: Dependencies): McpServer {
       const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
       protectedAbs.add(path.resolve(report.reportPath));
       await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
-      const conventionalCommit = report.overallStatus === 'pass'
-        ? await buildToolCommitSummary({
+      const finalBundle = report.overallStatus === 'pass'
+        ? await buildToolFinalBundle({
           planId: input.planId ?? null,
           fallbackTitle: 'verify responsive layout across viewports',
           fallbackSummary: `Responsive QA passed (${report.passedCases}/${report.totalCases} cases across ${report.routeCount} route(s))`,
@@ -829,14 +890,14 @@ export function createMcpServer(deps: Dependencies): McpServer {
       return result({
         ...report,
         evidenceId: evidence.id,
-        ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
+        ...(finalBundle ?? {}),
         nextAction: report.overallStatus === 'pass' ? 'Record responsive checkpoint as PASS with this evidence ID, then continue to layout inspection.' : 'Diagnose failed route/viewport cases, repair source code, then rerun this tool. Do not mark responsive PASS.'
       });
     } catch (error) { return errorResult(error); }
   });
 
   server.registerTool('localhost_run_interaction_scenario', {
-    description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
+    description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. On PASS, auto-runs final disk file-sync audit and emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), route: z.string().default('/'), actions: z.array(actionSchema).min(1).max(100), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowRiskyActions: z.boolean().default(false), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('functional-qa-agent') })
   }, async input => {
@@ -844,8 +905,8 @@ export function createMcpServer(deps: Dependencies): McpServer {
       const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
       const report = await deps.inspector.runInteractionScenario({ baseUrl: input.baseUrl, route: input.route, actions: toInteractionActions(input.actions), evidenceDirectory, timeoutMs: input.timeoutMs, allowRiskyActions: input.allowRiskyActions, captureScreenshots: input.captureScreenshots });
       const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Interaction scenario: ${report.runId}`, description: `${report.steps.filter(step => step.status === 'pass').length}/${report.steps.length} interaction steps passed.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { passed: report.passed, metricsHash: report.metricsHash, steps: report.steps }, createdBy: input.createdBy });
-      const conventionalCommit = report.passed
-        ? await buildToolCommitSummary({
+      const finalBundle = report.passed
+        ? await buildToolFinalBundle({
           planId: input.planId ?? null,
           fallbackTitle: `verify interaction flow on ${input.route}`,
           fallbackSummary: `Interaction scenario passed (${report.steps.length} step(s) on ${input.route})`,
@@ -856,7 +917,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
       return result({
         ...report,
         evidenceId: evidence.id,
-        ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {})
+        ...(finalBundle ?? {})
       });
     } catch (error) { return errorResult(error); }
   });
@@ -929,8 +990,8 @@ export function createMcpServer(deps: Dependencies): McpServer {
       const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
       protectedAbs.add(path.resolve(report.reportPath));
       await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
-      const conventionalCommit = report.overallStatus === 'pass'
-        ? await buildToolCommitSummary({
+      const finalBundle = report.overallStatus === 'pass'
+        ? await buildToolFinalBundle({
           planId: input.planId ?? null,
           fallbackTitle: 'verify visual contrast and accessibility',
           fallbackSummary: `Visual & A11y audit passed (${report.passedCases}/${report.totalCases} cases across [${report.testedColorSchemes.join(', ')}])`,
@@ -941,7 +1002,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
       return result({
         ...report,
         evidenceId: evidence.id,
-        ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
+        ...(finalBundle ?? {}),
         nextAction: report.overallStatus === 'pass'
           ? 'Review any incompleteContrast items over gradients/canvases, then use this evidence ID for typography-color and accessibility checkpoints.'
           : 'Fix every contrast, polarity, axe, typography, occlusion, or reduced-motion defect and rerun localhost_audit_visual_a11y. Do not pass checkpoints yet.'
@@ -1043,7 +1104,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     title: 'Principal Orchestrator Workflow',
     description: 'Plan and coordinate a project task using parallel subagents, Skills, MCP tools and independent verification.',
     argsSchema: z.object({ request: z.string().min(10), projectRoot: z.string().optional() })
-  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig_create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig_acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence. In every final output, ALWAYS include a Conventional Commits 1.0.0 git commit message (from craftrig_evaluate_quality_gate or craftrig_prepare_commit_message) summarizing the changes, and NEVER run git push.` } }] }));
+  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig_create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig_acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence. In every final output, ALWAYS report the automatic fileSyncAudit (verified files on disk + warn NOT to click Overwrite on stale/unsaved editor tabs; close with Don't Save or run File: Revert File) AND include a Conventional Commits 1.0.0 git commit message (from craftrig_evaluate_quality_gate or craftrig_prepare_commit_message) summarizing the changes, and NEVER run git push.` } }] }));
 
   server.registerPrompt('craftrig-autopilot', {
     title: 'Craftrig Full-Blueprint Autopilot',
@@ -1073,7 +1134,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
           '   - Require every subagent to return structured handoff (summary, changedFiles, contracts, decisions, testsRun) and pass it to craftrig_complete_task.',
           '   - If state === "needs_human": pause and present humanPrompt to the user.',
           '   - Repeat across ALL phases until state === "done".',
-          '3. At state === "done": present REQ-ID traceability matrix, skill/token telemetry, and MANDATORY Conventional Commits 1.0.0 git commit message (`conventionalCommit.fullMessage`) summarizing all changes — NEVER run `git push` or deploy without explicit user authorization.',
+          '3. At state === "done": present REQ-ID traceability matrix, skill/token telemetry, MANDATORY auto `fileSyncAudit` (verified files on disk + DO NOT click Overwrite warning for stale editor tabs — use Don\'t Save or `File: Revert File`), and MANDATORY Conventional Commits 1.0.0 git commit message (`conventionalCommit.fullMessage`) summarizing all changes — NEVER run `git push` or deploy without explicit user authorization.',
           '',
           `USER INPUT:\n${input}`
         ].join('\n')

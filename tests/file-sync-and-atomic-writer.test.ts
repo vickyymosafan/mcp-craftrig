@@ -12,6 +12,8 @@ import { FileSkillRegistry } from '../src/infrastructure/skills/file-skill-regis
 import { ModuleRegistry } from '../src/infrastructure/catalog/module-registry.js';
 import { TaskService } from '../src/application/task-service.js';
 import { AutopilotService } from '../src/application/autopilot-service.js';
+import { buildFinalFileSyncAudit } from '../src/application/final-file-sync-audit.js';
+import { GitChangesReader } from '../src/infrastructure/discovery/git-changes-reader.js';
 import { pathsOverlap, normalizeOwnedPaths } from '../src/domain/file-ownership.js';
 import { createMcpServer } from '../src/interfaces/mcp/server.js';
 import type { BrowserInspectorPort, DevServerPort } from '../src/domain/ports.js';
@@ -243,5 +245,91 @@ test('AutopilotService.selectDisjointWave skips ready tasks overlapping active i
     assert.ok(!dispatchedIds.includes(archTask.id), 'Must not dispatch task overlapping active in_progress file lock');
   } finally {
     repo.close();
+  }
+});
+
+test('buildFinalFileSyncAudit verifies updated files on disk, catches empty/missing files, and flags dangerous overwriteFileOnDisk setting', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'craftrig-final-sync-'));
+  try {
+    const canonicalRoot = await realpath(dir);
+    await mkdir(path.join(canonicalRoot, 'src', 'app'), { recursive: true });
+    await mkdir(path.join(canonicalRoot, 'src', 'components'), { recursive: true });
+    await writeFile(path.join(canonicalRoot, 'src', 'app', 'globals.css'), ':root { --bg: #fff; }\n', 'utf8');
+    await writeFile(path.join(canonicalRoot, 'src', 'components', 'Navbar.tsx'), 'export function Navbar() { return null; }\n', 'utf8');
+    await writeFile(path.join(canonicalRoot, 'src', 'empty.ts'), '', 'utf8');
+
+    const guard = new WorkspaceGuard(canonicalRoot);
+    const fingerprinter = new WorkspaceFileFingerprinter(guard);
+    const gitReader = new GitChangesReader(canonicalRoot);
+
+    // 1. Clean verified files (globals.css + Navbar.tsx) produce advisory stale-tab warning with DO NOT click Overwrite
+    const cleanAudit = await buildFinalFileSyncAudit({
+      candidatePaths: ['src/app/globals.css', 'src/components/Navbar.tsx'],
+      gitChangesReader: gitReader,
+      fileFingerprinter: fingerprinter
+    });
+    assert.equal(cleanAudit.allFilesVerifiedOnDisk, true);
+    assert.equal(cleanAudit.staleTabRisk, 'advisory');
+    assert.deepEqual(cleanAudit.staleEditorTabFiles, ['src/app/globals.css', 'src/components/Navbar.tsx']);
+    assert.match(cleanAudit.editorSyncGuidance, /DO NOT click Overwrite/i);
+    assert.match(cleanAudit.editorSyncGuidance, /File: Revert File/i);
+    assert.ok(cleanAudit.files.every(f => f.status === 'verified_on_disk' && f.sha256Short && f.sizeBytes > 0));
+
+    // 2. Empty (0-byte) or missing files escalate staleTabRisk to critical
+    const brokenAudit = await buildFinalFileSyncAudit({
+      candidatePaths: ['src/empty.ts', 'src/missing.tsx'],
+      gitChangesReader: gitReader,
+      fileFingerprinter: fingerprinter
+    });
+    assert.equal(brokenAudit.allFilesVerifiedOnDisk, false);
+    assert.equal(brokenAudit.staleTabRisk, 'critical');
+    assert.deepEqual(brokenAudit.emptyFiles, ['src/empty.ts']);
+    assert.deepEqual(brokenAudit.missingOnDiskFiles, ['src/missing.tsx']);
+
+    // 3. Doctor warns if .vscode/settings.json has dangerous overwriteFileOnDisk setting
+    await mkdir(path.join(canonicalRoot, '.vscode'), { recursive: true });
+    await writeFile(
+      path.join(canonicalRoot, '.vscode', 'settings.json'),
+      JSON.stringify({
+        'files.watcherExclude': { '**/.craftrig/**': true },
+        'files.saveConflictResolution': 'overwriteFileOnDisk'
+      }),
+      'utf8'
+    );
+    const repo = new SqliteStateRepository(':memory:');
+    const taskService = new TaskService(repo, undefined, gitReader, fingerprinter);
+    const server = createMcpServer({
+      workspaceRoot: canonicalRoot,
+      harnessRoot: process.cwd(),
+      guard,
+      taskService,
+      inspector: {
+        discoverRoutes: async () => ({ baseUrl: 'http://127.0.0.1:3000/', routes: ['/'], discoveredAt: new Date().toISOString() }),
+        inspectResponsive: async () => { throw new Error('Not used'); },
+        runInteractionScenario: async () => { throw new Error('Not used'); },
+        auditVisualA11y: async () => { throw new Error('Not used'); }
+      },
+      devServer: {
+        start: async () => ({ id: 'd1', pid: 1, status: 'running' }),
+        ensure: async () => ({ id: 'd1', pid: 1, status: 'running', reused: true }),
+        status: async () => ({ id: 'd1', status: 'running' }),
+        stop: async () => ({ id: 'd1', status: 'stopped' }),
+        stopAll: async () => undefined
+      },
+      skillRegistry: new FileSkillRegistry(path.join(process.cwd(), '.agent', 'skills')),
+      moduleRegistry: new ModuleRegistry(path.join(process.cwd(), 'catalogs', 'modules.json')),
+      checklistWriter: new ChecklistDocumentWriter(taskService, guard),
+      maxParallelTasks: 4,
+      browserTimeoutMs: 5000,
+      gitChangesReader: gitReader,
+      fileFingerprinter: fingerprinter
+    });
+    const doctorOut = JSON.parse((await (server as any)._registeredTools['craftrig_doctor'].handler({})).content[0].text);
+    assert.equal(doctorOut.compareOverwriteRisk, 'high');
+    assert.equal(doctorOut.ideWatcherHygiene.hasDangerousOverwriteSetting, true);
+    assert.ok(doctorOut.recommendations.some((r: string) => r.includes('overwriteFileOnDisk')));
+    repo.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

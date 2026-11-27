@@ -65,6 +65,14 @@ export class ChecklistDocumentWriter {
     const allTasksCompleted = snapshot.tasks.length > 0 && snapshot.tasks.every(t => t.status === 'completed');
     if (allTasksCompleted) {
       const commit = await this.tasks.buildConventionalCommit(planId);
+      const syncAudit = await this.tasks.buildFinalFileSyncAudit(planId, commit.changedFiles);
+      if (syncAudit.files.length > 0) {
+        lines.push('', '## Verified Disk Files (Do Not Overwrite Stale Editor Tabs)', '', '| File | Status | Size (B) | SHA-256 |', '|---|---|---:|---|');
+        for (const f of syncAudit.files.slice(0, 20)) {
+          lines.push(`| \`${markdownCell(f.path)}\` | ${f.status} | ${f.sizeBytes} | \`${f.sha256Short ?? 'n/a'}\` |`);
+        }
+        lines.push('', `> ${syncAudit.editorSyncGuidance}`);
+      }
       lines.push(
         '',
         '## Conventional Commit (No Push)',

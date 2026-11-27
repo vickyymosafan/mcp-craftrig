@@ -8,6 +8,7 @@ import type {
 import type { StateRepository, GitChangesReaderPort, FileFingerprinterPort } from '../domain/ports.js';
 import type { ConventionalCommitArtifact } from '../domain/conventional-commit.js';
 import { buildPlanConventionalCommit, type CommitOverrides } from './commit-message-builder.js';
+import { buildFinalFileSyncAudit, type FinalFileSyncAudit } from './final-file-sync-audit.js';
 import type {
   BatchClaimItem,
   BatchClaimResult,
@@ -923,12 +924,34 @@ export class TaskService {
     return buildPlanConventionalCommit(snapshot, traceability, this.gitChangesReader, overrides);
   }
 
+  async buildFinalFileSyncAudit(planId?: string, extraPaths: readonly string[] = []): Promise<FinalFileSyncAudit> {
+    const candidatePaths: string[] = [...extraPaths];
+    let activeLocks: FileLockRecord[] = [];
+    if (planId) {
+      const snapshot = await this.getPlan(planId);
+      for (const task of snapshot.tasks) {
+        if (task.handoff?.changedFiles?.length) candidatePaths.push(...task.handoff.changedFiles);
+        if (task.ownedPaths?.length) candidatePaths.push(...task.ownedPaths);
+      }
+      activeLocks = await this.listFileLocks({ planId });
+    } else {
+      activeLocks = await this.listFileLocks();
+    }
+    return buildFinalFileSyncAudit({
+      candidatePaths,
+      activeLocks,
+      ...(this.gitChangesReader ? { gitChangesReader: this.gitChangesReader } : {}),
+      ...(this.fileFingerprinter ? { fileFingerprinter: this.fileFingerprinter } : {})
+    });
+  }
+
   async evaluateGate(planId: string): Promise<{
     status: 'pass' | 'blocked';
     missing: string[];
     failed: string[];
     checkpoints: QualityCheckpoint[];
     conventionalCommit?: ConventionalCommitArtifact;
+    fileSyncAudit?: FinalFileSyncAudit;
     finalOutputRequirement?: string;
   }> {
     const snapshot = await this.getPlan(planId);
@@ -962,13 +985,15 @@ export class TaskService {
     }
     const traceability = await this.getRequirementTraceability(planId);
     const conventionalCommit = await buildPlanConventionalCommit(snapshot, traceability, this.gitChangesReader);
+    const fileSyncAudit = await this.buildFinalFileSyncAudit(planId, conventionalCommit.changedFiles);
     return {
       status: 'pass',
       missing,
       failed: [],
       checkpoints,
       conventionalCommit,
-      finalOutputRequirement: 'MANDATORY: Include conventionalCommit.fullMessage in your final output to summarize all verified changes. Commit locally only if needed — NEVER run git push without explicit user authorization.'
+      fileSyncAudit,
+      finalOutputRequirement: 'MANDATORY: Report fileSyncAudit (verified files on disk + DO NOT click Overwrite on stale editor tabs; use Don\'t Save or File: Revert File) AND include conventionalCommit.fullMessage in your final output. Commit locally only if needed — NEVER run git push without explicit user authorization.'
     };
   }
 

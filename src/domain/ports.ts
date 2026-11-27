@@ -29,9 +29,18 @@ export interface RepoScannerPort {
   scan(): Promise<DetectedRepoContext>;
 }
 
+export interface GitFileChangeEntry {
+  path: string;
+  indexStatus: string;
+  workingTreeStatus: string;
+  rawStatus: string;
+  isUnmergedConflict: boolean;
+}
+
 export interface WorkingTreeChanges {
   isGitRepo: boolean;
   changedFiles: string[];
+  entries?: GitFileChangeEntry[];
 }
 
 export interface GitChangesReaderPort {
