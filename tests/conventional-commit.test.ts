@@ -160,6 +160,15 @@ test('TaskService.evaluateGate emits conventionalCommit on PASS only and craftri
     assert.match(standalone.header, /^feat: add git working tree inspection$/);
     assert.ok(standalone.changedFiles.includes('src-change.ts'));
     assert.doesNotMatch(standalone.suggestedCommand, /\bgit\s+push\b/i);
+    assert.ok(standaloneRes.content[1]?.text.includes('[FINAL OUTPUT REQUIREMENT — NO PUSH]'));
+
+    // localhost_stop_dev_server also emits conventionalCommit + text notice (without push)
+    const stopRes = await tools['localhost_stop_dev_server'].handler({ processId: '00000000-0000-0000-0000-000000000001' });
+    const stopped = JSON.parse(stopRes.content[0].text);
+    assert.ok(stopped.conventionalCommit, 'localhost_stop_dev_server must include conventionalCommit');
+    assert.equal(stopped.conventionalCommit.noPush, true);
+    assert.ok(stopped.conventionalCommit.changedFiles.includes('src-change.ts'));
+    assert.ok(stopRes.content[1]?.text.includes(stopped.conventionalCommit.fullMessage));
 
     // Gate blocked -> no conventionalCommit
     const memService = new TaskService(new MemoryRepository());

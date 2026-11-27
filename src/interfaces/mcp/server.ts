@@ -78,7 +78,23 @@ async function emitProgress(ctx: unknown, progress: number, total: number, messa
   }
 }
 
-function result(value: unknown) { return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }; }
+const FINAL_OUTPUT_REQUIREMENT =
+  'MANDATORY: Include conventionalCommit.fullMessage (Conventional Commits 1.0.0) in your final output to summarize all changes. Do NOT run git push without explicit user authorization.';
+
+function result(value: unknown) {
+  const content: Array<{ type: 'text'; text: string }> = [
+    { type: 'text' as const, text: JSON.stringify(value) }
+  ];
+  const record = value as { conventionalCommit?: { fullMessage?: string }; fullMessage?: string; noPush?: boolean } | null;
+  const commitMessage = record?.conventionalCommit?.fullMessage ?? (record?.noPush ? record?.fullMessage : undefined);
+  if (commitMessage) {
+    content.push({
+      type: 'text' as const,
+      text: `[FINAL OUTPUT REQUIREMENT — NO PUSH]\nInclude this Conventional Commit message in your final output (do NOT run git push):\n\`\`\`text\n${commitMessage}\n\`\`\``
+    });
+  }
+  return { content };
+}
 function errorResult(error: unknown, recoveryHint?: string) {
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   let hint = recoveryHint;
@@ -118,6 +134,28 @@ export function createMcpServer(deps: Dependencies): McpServer {
   const assertWorkspacePaths = async (paths: readonly string[]) => {
     await Promise.all(paths.map(target => deps.guard.resolvePotentialPathInsideWorkspace(target)));
   };
+
+  async function buildToolCommitSummary(options: {
+    planId?: string | null;
+    fallbackTitle: string;
+    fallbackSummary: string;
+    fallbackScope: string;
+    fallbackType?: 'feat' | 'fix' | 'chore' | 'test';
+  }) {
+    if (options.planId) {
+      return deps.taskService.buildConventionalCommit(options.planId);
+    }
+    const workingTree = deps.gitChangesReader
+      ? await deps.gitChangesReader.readWorkingTreeChanges().catch(() => ({ isGitRepo: false, changedFiles: [] }))
+      : { isGitRepo: false, changedFiles: [] };
+    return buildConventionalCommit({
+      title: options.fallbackTitle,
+      summaryPoints: [options.fallbackSummary],
+      changedFiles: workingTree.changedFiles,
+      scope: options.fallbackScope,
+      ...(workingTree.changedFiles.length === 0 && options.fallbackType ? { type: options.fallbackType } : {})
+    });
+  }
 
   function registerToolWithAlias<T extends z.ZodTypeAny>(
     name: string,
@@ -452,7 +490,19 @@ export function createMcpServer(deps: Dependencies): McpServer {
       reason: z.string().max(2000).nullable().optional(),
       handoff: handoffSchema.nullable().optional()
     })
-  }, async ({ taskId, status, evidenceIds, reason, handoff }) => { try { const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null, handoff ?? null); const checklistPath = await deps.checklistWriter.write(task.planId); return result({ task, checklistPath }); } catch (error) { return errorResult(error); } });
+  }, async ({ taskId, status, evidenceIds, reason, handoff }) => { try {
+    const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null, handoff ?? null);
+    const checklistPath = await deps.checklistWriter.write(task.planId);
+    if (status === 'completed') {
+      const snapshot = await deps.taskService.getPlan(task.planId);
+      const allCompleted = snapshot.tasks.length > 0 && snapshot.tasks.every(t => t.status === 'completed');
+      if (allCompleted) {
+        const conventionalCommit = await deps.taskService.buildConventionalCommit(task.planId);
+        return result({ task, checklistPath, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
+      }
+    }
+    return result({ task, checklistPath });
+  } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('record_evidence', {
     description: 'Record auditable evidence for a plan or task. Evidence paths must be workspace-relative; do not record an assertion as evidence without an artifact or reproducible source.',
@@ -592,13 +642,22 @@ export function createMcpServer(deps: Dependencies): McpServer {
   }, async ({ processId }) => { try { return result(await deps.devServer.status(processId)); } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost_stop_dev_server', {
-    description: 'Stop only a development server process started and tracked by this MCP process.',
+    description: 'Stop only a development server process started and tracked by this MCP process. Emits a Conventional Commits 1.0.0 message (no push) for any workspace changes.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
     inputSchema: z.object({ processId: z.string().uuid() })
-  }, async ({ processId }) => { try { return result(await deps.devServer.stop(processId)); } catch (error) { return errorResult(error); } });
+  }, async ({ processId }) => { try {
+    const stopped = await deps.devServer.stop(processId);
+    const conventionalCommit = await buildToolCommitSummary({
+      fallbackTitle: 'verify localhost runtime changes',
+      fallbackSummary: 'Completed local dev server inspection and stopped tracked process',
+      fallbackScope: 'localhost',
+      fallbackType: 'chore'
+    });
+    return result({ ...stopped, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
+  } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost_inspect_responsive', {
-    description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect lean JPEG screenshots (failures-only by default, SHA-256 deduplicated), DOM overflow metrics + metricsHash, console/page/network errors, and a JSON report. This is the responsive-first browser QA tool.',
+    description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect lean JPEG screenshots (failures-only by default, SHA-256 deduplicated), DOM overflow metrics + metricsHash, console/page/network errors, and a JSON report. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), routes: z.array(z.string()).default(['/']), viewports: z.array(viewportSchema).optional(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowedOverflowSelectors: z.array(z.string()).default([]), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('responsive-qa-agent') })
   }, async input => { try {
@@ -609,22 +668,49 @@ export function createMcpServer(deps: Dependencies): McpServer {
     const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
     protectedAbs.add(path.resolve(report.reportPath));
     await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
-    return result({ ...report, evidenceId: evidence.id, nextAction: report.overallStatus === 'pass' ? 'Record responsive checkpoint as PASS with this evidence ID, then continue to layout inspection.' : 'Diagnose failed route/viewport cases, repair source code, then rerun this tool. Do not mark responsive PASS.' });
+    const conventionalCommit = report.overallStatus === 'pass'
+      ? await buildToolCommitSummary({
+          planId: input.planId ?? null,
+          fallbackTitle: 'verify responsive layout across viewports',
+          fallbackSummary: `Responsive QA passed (${report.passedCases}/${report.totalCases} cases across ${report.routeCount} route(s))`,
+          fallbackScope: 'responsive',
+          fallbackType: 'test'
+        })
+      : undefined;
+    return result({
+      ...report,
+      evidenceId: evidence.id,
+      ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
+      nextAction: report.overallStatus === 'pass' ? 'Record responsive checkpoint as PASS with this evidence ID, then continue to layout inspection.' : 'Diagnose failed route/viewport cases, repair source code, then rerun this tool. Do not mark responsive PASS.'
+    });
   } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost_run_interaction_scenario', {
-    description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. Potentially destructive selectors are blocked unless allowRiskyActions is explicitly true for an isolated test environment.',
+    description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), route: z.string().default('/'), actions: z.array(actionSchema).min(1).max(100), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowRiskyActions: z.boolean().default(false), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('functional-qa-agent') })
   }, async input => { try {
     const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
     const report = await deps.inspector.runInteractionScenario({ baseUrl: input.baseUrl, route: input.route, actions: toInteractionActions(input.actions), evidenceDirectory, timeoutMs: input.timeoutMs, allowRiskyActions: input.allowRiskyActions, captureScreenshots: input.captureScreenshots });
     const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Interaction scenario: ${report.runId}`, description: `${report.steps.filter(step => step.status === 'pass').length}/${report.steps.length} interaction steps passed.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { passed: report.passed, metricsHash: report.metricsHash, steps: report.steps }, createdBy: input.createdBy });
-    return result({ ...report, evidenceId: evidence.id });
+    const conventionalCommit = report.passed
+      ? await buildToolCommitSummary({
+          planId: input.planId ?? null,
+          fallbackTitle: `verify interaction flow on ${input.route}`,
+          fallbackSummary: `Interaction scenario passed (${report.steps.length} step(s) on ${input.route})`,
+          fallbackScope: 'ui',
+          fallbackType: 'test'
+        })
+      : undefined;
+    return result({
+      ...report,
+      evidenceId: evidence.id,
+      ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {})
+    });
   } catch (error) { return errorResult(error); } });
 
   server.registerTool('localhost_audit_visual_a11y', {
-    description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost. Captures deduplicated JPEG screenshots on failures-only by default to save disk.',
+    description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({
       baseUrl: z.string().url(),
@@ -687,9 +773,19 @@ export function createMcpServer(deps: Dependencies): McpServer {
     const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
     protectedAbs.add(path.resolve(report.reportPath));
     await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
+    const conventionalCommit = report.overallStatus === 'pass'
+      ? await buildToolCommitSummary({
+          planId: input.planId ?? null,
+          fallbackTitle: 'verify visual contrast and accessibility',
+          fallbackSummary: `Visual & A11y audit passed (${report.passedCases}/${report.totalCases} cases across [${report.testedColorSchemes.join(', ')}])`,
+          fallbackScope: 'a11y',
+          fallbackType: 'test'
+        })
+      : undefined;
     return result({
       ...report,
       evidenceId: evidence.id,
+      ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
       nextAction: report.overallStatus === 'pass'
         ? 'Review any incompleteContrast items over gradients/canvases, then use this evidence ID for typography-color and accessibility checkpoints.'
         : 'Fix every contrast, polarity, axe, typography, occlusion, or reduced-motion defect and rerun localhost_audit_visual_a11y. Do not pass checkpoints yet.'
