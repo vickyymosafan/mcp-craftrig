@@ -12,13 +12,14 @@ Represent work as a directed acyclic graph. A task may start only when all depen
 ## Delegation process
 1. Read the task and project context, or fetch the task packet via `craftrig://plans/{planId}/tasks/{taskId}/packet`.
 2. Decompose by independently verifiable outcomes, not by arbitrary file count.
-3. Identify dependencies and shared-file conflicts (`craftrig_list_file_locks`).
-4. Assign one owner role per task and lock explicit write ownership via `craftrig_claim_task` (`ownedPaths`), `craftrig_claim_ready_batch`, or `craftrig_acquire_file_locks`.
-5. Group independent tasks with disjoint owned paths into parallel batches (e.g. `qa-wave` fan-out after integration).
-6. Send each subagent a bounded context packet listing its locked paths and lease duration.
-7. Long-running subagents send periodic heartbeats via `craftrig_heartbeat_task` to prevent lease expiration.
-8. Collect structured results and evidence; locks release automatically on `craftrig_complete_task` or `craftrig_reopen_task` (or explicitly via `craftrig_release_file_locks`).
-9. Run integration and regression checks.
+3. Identify dependencies and shared-file conflicts (`craftrig_list_file_locks`, `craftrig_check_file_sync`).
+4. Assign one owner role per task and lock explicit write ownership via `craftrig_claim_task` (`ownedPaths`), `craftrig_claim_ready_batch`, or `craftrig_acquire_file_locks` (captures on-disk SHA-256/mtime baseline fingerprints).
+5. Before editing or saving shared/existing files, verify sync via `craftrig_check_file_sync`; if `drifted_on_disk` is reported, reload the latest file first to eliminate IDE Compare/Overwrite save conflicts.
+6. Group independent tasks with disjoint owned paths into parallel batches (e.g. `qa-wave` fan-out after integration).
+7. Send each subagent a bounded context packet listing its locked paths and lease duration.
+8. Long-running subagents send periodic heartbeats via `craftrig_heartbeat_task` to prevent lease expiration.
+9. Collect structured results and evidence; locks release automatically on `craftrig_complete_task` or `craftrig_reopen_task` (or explicitly via `craftrig_release_file_locks`).
+10. Run integration and regression checks.
 
 ## Parallel QA Wave
 Following the `integrate-and-build` milestone, UI tasks fan out into a parallel QA wave (`parallelGroup: 'qa-wave'`). The Orchestrator can batch-claim (`craftrig_claim_ready_batch`) or spawn simultaneous subagents for:

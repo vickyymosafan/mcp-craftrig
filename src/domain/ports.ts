@@ -1,5 +1,5 @@
 import type { DetectedRepoContext, ProjectBlueprint } from './blueprint.js';
-import type { HarnessState } from './models.js';
+import type { FileFingerprint, HarnessState } from './models.js';
 
 export interface StorageStats {
   backend: 'json' | 'sqlite';
@@ -36,6 +36,10 @@ export interface WorkingTreeChanges {
 
 export interface GitChangesReaderPort {
   readWorkingTreeChanges(): Promise<WorkingTreeChanges>;
+}
+
+export interface FileFingerprinterPort {
+  capture(relativePath: string): Promise<FileFingerprint>;
 }
 
 export interface BlueprintArtifactWriterPort {

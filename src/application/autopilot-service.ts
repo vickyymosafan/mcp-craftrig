@@ -186,15 +186,25 @@ export class AutopilotService {
     return packet;
   }
 
-  private selectDisjointWave(ready: TaskNode[], limit: number): TaskNode[] {
+  private selectDisjointWave(ready: TaskNode[], limit: number, activeLockedPaths: readonly string[] = []): TaskNode[] {
     const selected: TaskNode[] = [];
-    const claimedPaths: string[] = [];
+    const claimedPaths: string[] = [...activeLockedPaths];
+    let hasUnscopedTask = false;
 
     for (const task of ready) {
       if (selected.length >= limit) break;
       const candidatePaths = task.ownedPaths.length > 0 ? task.ownedPaths : (task.recommendedPaths ?? []);
-      const conflicts = candidatePaths.some(p => claimedPaths.some(existing => pathsOverlap(p, existing)));
-      if (conflicts && selected.length > 0) continue;
+      if (candidatePaths.length === 0) {
+        // Never batch unscoped tasks concurrently with other tasks (prevents blind Compare/Overwrite collisions on shared files)
+        if (selected.length > 0 || activeLockedPaths.length > 0 || hasUnscopedTask) continue;
+        selected.push(task);
+        hasUnscopedTask = true;
+        break;
+      }
+      const conflictsWithActive = candidatePaths.some(p => activeLockedPaths.some(existing => pathsOverlap(p, existing)));
+      if (conflictsWithActive) continue;
+      const conflictsWithWave = candidatePaths.some(p => claimedPaths.some(existing => pathsOverlap(p, existing)));
+      if (conflictsWithWave && selected.length > 0) continue;
       selected.push(task);
       claimedPaths.push(...candidatePaths);
     }
@@ -376,9 +386,10 @@ export class AutopilotService {
       };
     }
 
-    // 4. Dispatch subagent / inline wave (respecting maxSubagentsPerWave & disjoint paths)
+    // 4. Dispatch subagent / inline wave (respecting maxSubagentsPerWave, active file locks & disjoint paths)
     const maxWave = Math.max(1, options.maxWaveSize ?? plan.maxSubagentsPerWave ?? this.defaultMaxParallelTasks);
-    const waveTasks = this.selectDisjointWave(readyTasks, maxWave);
+    const activeLocks = await this.taskService.listFileLocks({ planId });
+    const waveTasks = this.selectDisjointWave(readyTasks, maxWave, activeLocks.map(l => l.path));
     if (waveTasks.length > 0) {
       const dispatchWave: AutopilotWaveItem[] = [];
       for (const t of waveTasks) {

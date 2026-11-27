@@ -1,0 +1,8 @@
+{
+  "files.watcherExclude": {
+    "**/.craftrig/**": true
+  },
+  "search.exclude": {
+    "**/.craftrig/**": true
+  }
+}

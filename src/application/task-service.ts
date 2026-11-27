@@ -5,7 +5,7 @@ import type {
   RequirementTraceabilityEntry,
   TaskHandoff
 } from '../domain/blueprint.js';
-import type { StateRepository, GitChangesReaderPort } from '../domain/ports.js';
+import type { StateRepository, GitChangesReaderPort, FileFingerprinterPort } from '../domain/ports.js';
 import type { ConventionalCommitArtifact } from '../domain/conventional-commit.js';
 import { buildPlanConventionalCommit, type CommitOverrides } from './commit-message-builder.js';
 import type {
@@ -13,6 +13,7 @@ import type {
   BatchClaimResult,
   EvidenceRecord,
   ExecutionPlan,
+  FileFingerprint,
   FileLockRecord,
   HarnessState,
   PlanInsights,
@@ -65,7 +66,8 @@ function acquireTaskLocks(
   agentId: string,
   pathsToLock: readonly string[],
   timestamp: string,
-  expiresAt?: string | null
+  expiresAt?: string | null,
+  fingerprints?: ReadonlyMap<string, FileFingerprint>
 ): string[] {
   const normalized = normalizeOwnedPaths(pathsToLock);
   const fileLocks = ensureFileLocks(state);
@@ -82,13 +84,23 @@ function acquireTaskLocks(
   }
 
   for (const candidate of normalized) {
+    // Remove any case-variant key owned by the same task to keep locks deduplicated on case-insensitive FS
+    const lowerCandidate = candidate.toLowerCase();
+    for (const [existingKey, existingLock] of Object.entries(fileLocks)) {
+      if (existingLock.taskId === task.id && existingKey.toLowerCase() === lowerCandidate && existingKey !== candidate) {
+        delete fileLocks[existingKey];
+      }
+    }
+    const existingRecord = fileLocks[candidate];
+    const baselineFingerprint = fingerprints?.get(lowerCandidate) ?? existingRecord?.baselineFingerprint ?? null;
     fileLocks[candidate] = {
       path: candidate,
       planId: task.planId,
       taskId: task.id,
       agentId,
       acquiredAt: timestamp,
-      expiresAt: expiresAt ?? null
+      expiresAt: expiresAt ?? null,
+      baselineFingerprint
     };
   }
   return normalized;
@@ -154,12 +166,46 @@ export interface ListFileLocksFilter {
   path?: string;
 }
 
+export interface FileSyncEntry {
+  path: string;
+  status: 'clean' | 'drifted_on_disk' | 'deleted_on_disk' | 'locked_by_other_agent' | 'untracked_new';
+  safeToWrite: boolean;
+  recoveryAction: 'proceed' | 'reload_file_before_edit' | 'wait_for_lock_owner';
+  lockOwner: { taskId: string; agentId: string; lockPath: string } | null;
+  baselineFingerprint: FileFingerprint | null;
+  currentFingerprint: FileFingerprint | null;
+  detail: string;
+}
+
+export interface FileSyncCheckResult {
+  allSafeToWrite: boolean;
+  conflictsCount: number;
+  files: FileSyncEntry[];
+  guidance: string;
+}
+
 export class TaskService {
   constructor(
     private readonly repository: StateRepository,
     private readonly planner = new TaskPlanner(),
-    private readonly gitChangesReader?: GitChangesReaderPort
+    private readonly gitChangesReader?: GitChangesReaderPort,
+    private readonly fileFingerprinter?: FileFingerprinterPort
   ) {}
+
+  private async captureFingerprints(paths: readonly string[]): Promise<Map<string, FileFingerprint>> {
+    const map = new Map<string, FileFingerprint>();
+    if (!this.fileFingerprinter || paths.length === 0) return map;
+    const normalized = normalizeOwnedPaths(paths);
+    await Promise.all(normalized.map(async p => {
+      try {
+        const fp = await this.fileFingerprinter!.capture(p);
+        map.set(p.toLowerCase(), fp);
+      } catch {
+        // Non-fatal: lock acquisition proceeds even if file cannot be stat'd
+      }
+    }));
+    return map;
+  }
 
   async createPlan(input: CreatePlanInput): Promise<{ plan: ExecutionPlan; tasks: TaskNode[]; checkpoints: QualityCheckpoint[] }> {
     const { plan, tasks } = this.planner.create(input);
@@ -422,6 +468,7 @@ export class TaskService {
 
   async claimTask(taskId: string, agentId: string, ownedPaths?: readonly string[], leaseTimeoutMs?: number): Promise<TaskNode> {
     if (!agentId.trim()) throw new ValidationError('agentId must not be empty.');
+    const fingerprints = ownedPaths ? await this.captureFingerprints(ownedPaths) : undefined;
     return this.repository.transact(state => {
       autoRecoverExpiredLeases(state);
       const task = state.tasks[taskId];
@@ -433,7 +480,7 @@ export class TaskService {
       const leaseMs = leaseTimeoutMs ?? (15 * 60 * 1000);
       const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
       const targetPaths = ownedPaths !== undefined ? ownedPaths : (task.ownedPaths ?? []);
-      const lockedPaths = acquireTaskLocks(state, task, agentId, targetPaths, timestamp, leaseExpiresAt);
+      const lockedPaths = acquireTaskLocks(state, task, agentId, targetPaths, timestamp, leaseExpiresAt, fingerprints);
       const updated: TaskNode = {
         ...task,
         ownedPaths: lockedPaths,
@@ -456,6 +503,17 @@ export class TaskService {
     claims: readonly BatchClaimItem[]
   ): Promise<BatchClaimResult> {
     if (claims.length === 0) throw new ValidationError('At least one claim request is required.');
+    const preRead = await this.repository.read();
+    const candidatePathsToFingerprint: string[] = [];
+    for (const item of claims) {
+      const t = preRead.tasks[item.taskId];
+      const paths = item.ownedPaths !== undefined
+        ? item.ownedPaths
+        : (t?.ownedPaths?.length ? t.ownedPaths : (claims.length > 1 ? (t?.recommendedPaths ?? []) : []));
+      candidatePathsToFingerprint.push(...paths);
+    }
+    const fingerprints = await this.captureFingerprints(candidatePathsToFingerprint);
+
     return this.repository.transact(state => {
       autoRecoverExpiredLeases(state);
       const plan = state.plans[planId];
@@ -492,10 +550,12 @@ export class TaskService {
 
         const leaseMs = item.leaseTimeoutMs ?? (15 * 60 * 1000);
         const leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
-        const targetPaths = item.ownedPaths !== undefined ? item.ownedPaths : (task.ownedPaths ?? []);
+        const targetPaths = item.ownedPaths !== undefined
+          ? item.ownedPaths
+          : (task.ownedPaths.length > 0 ? task.ownedPaths : (claims.length > 1 ? (task.recommendedPaths ?? []) : []));
 
         try {
-          const lockedPaths = acquireTaskLocks(state, task, item.agentId, targetPaths, timestamp, leaseExpiresAt);
+          const lockedPaths = acquireTaskLocks(state, task, item.agentId, targetPaths, timestamp, leaseExpiresAt, fingerprints);
           acquiredLocks.push(...lockedPaths);
           const updated: TaskNode = {
             ...task,
@@ -560,14 +620,15 @@ export class TaskService {
   async acquireFileLocks(taskId: string, agentId: string, paths: readonly string[]): Promise<{ task: TaskNode; locks: FileLockRecord[] }> {
     if (!agentId.trim()) throw new ValidationError('agentId must not be empty.');
     if (paths.length === 0) throw new ValidationError('At least one workspace-relative path is required.');
+    const fingerprints = await this.captureFingerprints(paths);
     return this.repository.transact(state => {
       const task = state.tasks[taskId];
       if (!task) throw new NotFoundError('Task', taskId);
       if (task.status !== 'in_progress') throw new ConflictError(`Task must be in_progress to acquire file locks. Current: ${task.status}`);
       if (task.claimedBy !== agentId) throw new ConflictError(`Task is claimed by "${task.claimedBy ?? 'unassigned'}", not "${agentId}".`);
       const timestamp = now();
-      const acquiredPaths = acquireTaskLocks(state, task, agentId, paths, timestamp);
-      const ownedPaths = [...new Set([...(task.ownedPaths ?? []), ...acquiredPaths])];
+      const acquiredPaths = acquireTaskLocks(state, task, agentId, paths, timestamp, task.leaseExpiresAt, fingerprints);
+      const ownedPaths = normalizeOwnedPaths([...(task.ownedPaths ?? []), ...acquiredPaths]);
       const updated: TaskNode = { ...task, ownedPaths, updatedAt: timestamp };
       state.tasks[taskId] = updated;
       const plan = state.plans[task.planId];
@@ -588,17 +649,17 @@ export class TaskService {
       if (task.status !== 'in_progress') throw new ConflictError(`Task must be in_progress to release file locks. Current: ${task.status}`);
       if (task.claimedBy !== agentId) throw new ConflictError(`Task is claimed by "${task.claimedBy ?? 'unassigned'}", not "${agentId}".`);
       const fileLocks = ensureFileLocks(state);
-      const targetSet = paths !== undefined ? new Set(normalizeOwnedPaths(paths)) : null;
+      const targetLowerSet = paths !== undefined ? new Set(normalizeOwnedPaths(paths).map(p => p.toLowerCase())) : null;
       const releasedPaths: string[] = [];
       for (const [lockPath, lock] of Object.entries(fileLocks)) {
-        if (lock.taskId === taskId && (targetSet === null || targetSet.has(lockPath))) {
+        if (lock.taskId === taskId && (targetLowerSet === null || targetLowerSet.has(lockPath.toLowerCase()))) {
           delete fileLocks[lockPath];
           releasedPaths.push(lockPath);
         }
       }
-      const nextOwned = targetSet === null
+      const nextOwned = targetLowerSet === null
         ? []
-        : (task.ownedPaths ?? []).filter(ownedPath => !targetSet.has(ownedPath));
+        : (task.ownedPaths ?? []).filter(ownedPath => !targetLowerSet.has(ownedPath.toLowerCase()));
       const timestamp = now();
       const updated: TaskNode = { ...task, ownedPaths: nextOwned, updatedAt: timestamp };
       state.tasks[taskId] = updated;
@@ -606,6 +667,116 @@ export class TaskService {
       if (plan) state.plans[task.planId] = { ...plan, updatedAt: timestamp };
       return { task: updated, releasedPaths: releasedPaths.sort() };
     });
+  }
+
+  async checkFileSync(input: {
+    paths: readonly string[];
+    taskId?: string;
+    agentId?: string;
+  }): Promise<FileSyncCheckResult> {
+    if (input.paths.length === 0) {
+      throw new ValidationError('At least one workspace-relative path is required for checkFileSync.');
+    }
+    const normalized = normalizeOwnedPaths(input.paths);
+    const state = await this.repository.read();
+    const activeLocks = Object.values(state.fileLocks ?? {});
+    const files: FileSyncEntry[] = [];
+
+    for (const candidate of normalized) {
+      const matchingLocks = activeLocks.filter(lock => pathsOverlap(candidate, lock.path));
+      const conflictingLock = matchingLocks.find(lock => {
+        if (input.taskId && lock.taskId === input.taskId) return false;
+        if (!input.taskId && input.agentId && lock.agentId === input.agentId) return false;
+        return true;
+      });
+      const ownLock = matchingLocks.find(lock =>
+        (input.taskId && lock.taskId === input.taskId) ||
+        (!input.taskId && input.agentId && lock.agentId === input.agentId)
+      );
+
+      const currentFingerprint = this.fileFingerprinter
+        ? await this.fileFingerprinter.capture(candidate).catch(() => null)
+        : null;
+      const baselineFingerprint = ownLock?.baselineFingerprint ?? null;
+
+      if (conflictingLock) {
+        files.push({
+          path: candidate,
+          status: 'locked_by_other_agent',
+          safeToWrite: false,
+          recoveryAction: 'wait_for_lock_owner',
+          lockOwner: { taskId: conflictingLock.taskId, agentId: conflictingLock.agentId, lockPath: conflictingLock.path },
+          baselineFingerprint,
+          currentFingerprint,
+          detail: `Locked by agent "${conflictingLock.agentId}" on task "${conflictingLock.taskId}" via "${conflictingLock.path}". Do not overwrite concurrently.`
+        });
+        continue;
+      }
+
+      if (baselineFingerprint && currentFingerprint) {
+        if (baselineFingerprint.exists && !currentFingerprint.exists) {
+          files.push({
+            path: candidate,
+            status: 'deleted_on_disk',
+            safeToWrite: false,
+            recoveryAction: 'reload_file_before_edit',
+            lockOwner: ownLock ? { taskId: ownLock.taskId, agentId: ownLock.agentId, lockPath: ownLock.path } : null,
+            baselineFingerprint,
+            currentFingerprint,
+            detail: 'File existed when lock was acquired but has been deleted on disk.'
+          });
+          continue;
+        }
+        if (baselineFingerprint.sha256 && currentFingerprint.sha256 && baselineFingerprint.sha256 !== currentFingerprint.sha256) {
+          files.push({
+            path: candidate,
+            status: 'drifted_on_disk',
+            safeToWrite: false,
+            recoveryAction: 'reload_file_before_edit',
+            lockOwner: ownLock ? { taskId: ownLock.taskId, agentId: ownLock.agentId, lockPath: ownLock.path } : null,
+            baselineFingerprint,
+            currentFingerprint,
+            detail: 'File content on disk changed since the lock baseline was captured (external editor/formatter/agent edit). Re-read the latest file before editing to prevent Compare/Overwrite conflicts.'
+          });
+          continue;
+        }
+      }
+
+      if (currentFingerprint && !currentFingerprint.exists) {
+        files.push({
+          path: candidate,
+          status: 'untracked_new',
+          safeToWrite: true,
+          recoveryAction: 'proceed',
+          lockOwner: ownLock ? { taskId: ownLock.taskId, agentId: ownLock.agentId, lockPath: ownLock.path } : null,
+          baselineFingerprint,
+          currentFingerprint,
+          detail: 'New file path with no active lock conflicts; safe to create.'
+        });
+        continue;
+      }
+
+      files.push({
+        path: candidate,
+        status: 'clean',
+        safeToWrite: true,
+        recoveryAction: 'proceed',
+        lockOwner: ownLock ? { taskId: ownLock.taskId, agentId: ownLock.agentId, lockPath: ownLock.path } : null,
+        baselineFingerprint,
+        currentFingerprint,
+        detail: 'No conflicting locks or external on-disk drift detected; safe to edit.'
+      });
+    }
+
+    const conflictsCount = files.filter(f => !f.safeToWrite).length;
+    return {
+      allSafeToWrite: conflictsCount === 0,
+      conflictsCount,
+      files,
+      guidance: conflictsCount === 0
+        ? 'All checked files are synchronized and safe to edit without Compare/Overwrite conflicts.'
+        : `${conflictsCount} file(s) have active lock conflicts or on-disk drift. Reload drifted files or wait for lock owners before saving.`
+    };
   }
 
   async listFileLocks(filter?: ListFileLocksFilter): Promise<FileLockRecord[]> {

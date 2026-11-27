@@ -1,7 +1,7 @@
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
 import { EMPTY_STATE, type HarnessState } from '../../domain/models.js';
 import type { StateRepository, StorageStats } from '../../domain/ports.js';
+import { writeFileAtomicIfChanged } from './atomic-file-writer.js';
 
 class AsyncMutex {
   private tail: Promise<void> = Promise.resolve();
@@ -27,10 +27,7 @@ export class JsonStateRepository implements StateRepository {
     return this.mutex.run(async () => {
       const state = await this.readUnsafe();
       const result = await operation(state);
-      await mkdir(path.dirname(this.stateFile), { recursive: true });
-      const temporaryFile = `${this.stateFile}.${process.pid}.tmp`;
-      await writeFile(temporaryFile, JSON.stringify(state, null, 2), 'utf8');
-      await rename(temporaryFile, this.stateFile);
+      await writeFileAtomicIfChanged(this.stateFile, JSON.stringify(state, null, 2), { skipIfUnchanged: true });
       return result;
     });
   }

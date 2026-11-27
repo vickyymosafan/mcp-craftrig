@@ -11,6 +11,7 @@ import { FileSkillRegistry } from './infrastructure/skills/file-skill-registry.j
 import { ModuleRegistry } from './infrastructure/catalog/module-registry.js';
 import { WorkspaceRepoScanner } from './infrastructure/discovery/repo-scanner.js';
 import { GitChangesReader } from './infrastructure/discovery/git-changes-reader.js';
+import { WorkspaceFileFingerprinter } from './infrastructure/persistence/file-fingerprinter.js';
 import { FileBlueprintArtifactWriter } from './infrastructure/persistence/blueprint-artifact-writer.js';
 import { TaskService } from './application/task-service.js';
 import { BlueprintArchitectService } from './application/blueprint-architect.js';
@@ -34,7 +35,8 @@ const { repository, selectedBackend } = createStateRepository({
   sqliteIdleCloseMs: runtimeConfig.sqliteIdleCloseMs
 });
 const gitChangesReader = new GitChangesReader(workspaceRoot);
-const taskService = new TaskService(repository, new TaskPlanner(runtimeConfig.maxRepairIterations), gitChangesReader);
+const fileFingerprinter = new WorkspaceFileFingerprinter(guard);
+const taskService = new TaskService(repository, new TaskPlanner(runtimeConfig.maxRepairIterations), gitChangesReader, fileFingerprinter);
 const repoScanner = new WorkspaceRepoScanner(workspaceRoot);
 const blueprintWriter = new FileBlueprintArtifactWriter(guard, workspaceRoot);
 const blueprintArchitect = new BlueprintArchitectService(repository, repoScanner, blueprintWriter);

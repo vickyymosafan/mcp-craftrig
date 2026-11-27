@@ -13,6 +13,14 @@ export type CheckpointStatus = 'pending' | 'pass' | 'fail' | 'blocked' | 'not_ap
 export type EvidenceKind = 'browser-report' | 'screenshot' | 'test-report' | 'build-log' | 'security-report' | 'manual-review' | 'other';
 export type WorkDomain = 'frontend' | 'backend' | 'design' | 'responsive' | 'threejs' | 'motion' | 'security' | 'data' | 'release';
 
+export interface FileFingerprint {
+  exists: boolean;
+  sha256: string | null;
+  size: number;
+  mtimeMs: number | null;
+  capturedAt: string;
+}
+
 export interface FileLockRecord {
   path: string;
   planId: string;
@@ -20,6 +28,7 @@ export interface FileLockRecord {
   agentId: string;
   acquiredAt: string;
   expiresAt?: string | null;
+  baselineFingerprint?: FileFingerprint | null;
 }
 
 export interface TaskNode {

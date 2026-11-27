@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   BrowserInspectorPort,
@@ -16,6 +16,7 @@ import type {
   VisualA11yCaseResult
 } from '../../domain/ports.js';
 import { assertLocalhostUrl } from '../security/workspace-guard.js';
+import { writeFileAtomicIfChanged } from '../persistence/atomic-file-writer.js';
 import { computeMetricsHash, saveContentAddressedBlob } from '../persistence/evidence-store.js';
 import { evaluateDomVisualA11y, extractAxeFindings } from './visual-a11y-evaluator.js';
 import { auditWebGLCanvases, installWebGLTracker, WEBGL_SHADER_WARNING_PATTERN } from './webgl-audit.js';
@@ -457,8 +458,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
         overallStatus: passedCases === results.length ? 'pass' : 'fail', results,
         reportPath: path.join(evidenceDirectory, runId, 'responsive-report.json')
       };
-      await mkdir(path.dirname(report.reportPath), { recursive: true });
-      await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
+      await writeFileAtomicIfChanged(report.reportPath, JSON.stringify(report, null, 2), { skipIfUnchanged: true });
       return report;
     });
   }
@@ -540,7 +540,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
       const passed = steps.every(step => step.status === 'pass') && consoleErrors.length === 0 && pageErrors.length === 0 && localHttpErrors.length === 0 && localFailedRequests.length === 0;
       const metricsHash = computeMetricsHash({ route, passed, steps });
       const report: InteractionScenarioReport = { runId, route, passed, startedAt, finishedAt, steps, consoleErrors, pageErrors, failedRequests, httpErrors, screenshotPath, screenshotBytes, metricsHash, reportPath: path.join(directory, 'interaction-report.json') };
-      await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
+      await writeFileAtomicIfChanged(report.reportPath, JSON.stringify(report, null, 2), { skipIfUnchanged: true });
       return report;
     });
   }
@@ -679,7 +679,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           clsScore = domMetrics.clsScore;
 
           const ariaYaml = await page.locator('body').ariaSnapshot({ mode: 'ai', boxes: true }).catch(() => '');
-          await writeFile(ariaSnapshotPath, ariaYaml || '# ariaSnapshot unavailable', 'utf8');
+          await writeFileAtomicIfChanged(ariaSnapshotPath, ariaYaml || '# ariaSnapshot unavailable', { skipIfUnchanged: true });
 
           if (input.testReducedMotion) {
             await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -724,7 +724,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
           issues.push(error instanceof Error ? error.message : String(error));
           const shot = await captureLeanScreenshot(page, evidenceDirectory, false);
           if (shot) { screenshotPath = shot.path; screenshotBytes = shot.bytes; }
-          await writeFile(ariaSnapshotPath, '# ariaSnapshot skipped due to error', 'utf8').catch(() => undefined);
+          await writeFileAtomicIfChanged(ariaSnapshotPath, '# ariaSnapshot skipped due to error', { skipIfUnchanged: true }).catch(() => undefined);
         } finally {
           if (issues.length > 0) {
             tracePath = path.join(caseDirectory, 'trace.zip');
@@ -846,8 +846,7 @@ export class PlaywrightInspector implements BrowserInspectorPort {
         results,
         reportPath: path.join(evidenceDirectory, runId, 'visual-a11y-report.json')
       };
-      await mkdir(path.dirname(report.reportPath), { recursive: true });
-      await writeFile(report.reportPath, JSON.stringify(report, null, 2), 'utf8');
+      await writeFileAtomicIfChanged(report.reportPath, JSON.stringify(report, null, 2), { skipIfUnchanged: true });
       return report;
     });
   }

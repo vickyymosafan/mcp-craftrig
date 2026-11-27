@@ -137,6 +137,8 @@ claude mcp add craftrig -- node d:/craftrig/dist/src/index.js
 | `craftrig_acquire_file_locks` | Concurrency | Locks additional workspace-relative paths for an in-progress task. |
 | `craftrig_release_file_locks` | Concurrency | Releases acquired file locks upon task completion or step handover. |
 | `craftrig_recover_stale_locks` | Recovery | Reclaims orphaned locks left by completed, failed, or timed-out tasks. |
+| `craftrig_check_file_sync` | Conflict Guard | Optimistic concurrency guard checking active case-insensitive locks and on-disk SHA-256/mtime drift before saving to prevent IDE Compare/Overwrite dialogs. |
+| `craftrig_doctor` | Diagnostics | One-shot workspace health check: lock drift, Compare/Overwrite risk, `.vscode/settings.json` watcher hygiene, storage stats, git dirty state, and tool validation. |
 | `craftrig_record_evidence` | Verification | Records auditable evidence (test reports, screenshots, build logs). |
 | `craftrig_evaluate_quality_gate` | Quality Gate | Assesses all required acceptance criteria checkpoints before release and emits a Conventional Commits 1.0.0 message on PASS (no push). |
 | `craftrig_prepare_commit_message` | Release | Generates a Conventional Commits 1.0.0 git commit message from plan handoffs or working tree git changes without pushing (`noPush: true`). |

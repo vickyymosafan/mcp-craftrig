@@ -78,6 +78,18 @@ async function emitProgress(ctx: unknown, progress: number, total: number, messa
   }
 }
 
+async function emitLog(ctx: unknown, level: 'info' | 'warning' | 'error', data: unknown): Promise<void> {
+  const mcpReq = (ctx as { mcpReq?: { log?: (lvl: string, payload: unknown) => Promise<void> } } | undefined)?.mcpReq;
+  if (typeof mcpReq?.log === 'function') {
+    await mcpReq.log(level, data).catch(() => undefined);
+  }
+}
+
+function isRequestAborted(ctx: unknown): boolean {
+  const signal = (ctx as { mcpReq?: { signal?: AbortSignal } } | undefined)?.mcpReq?.signal;
+  return Boolean(signal?.aborted);
+}
+
 const FINAL_OUTPUT_REQUIREMENT =
   'MANDATORY: Include conventionalCommit.fullMessage (Conventional Commits 1.0.0) in your final output to summarize all changes. Do NOT run git push without explicit user authorization.';
 
@@ -128,7 +140,7 @@ function errorResult(error: unknown, recoveryHint?: string) {
 }
 
 export function createMcpServer(deps: Dependencies): McpServer {
-  const server = new McpServer({ name: 'craftrig', version: '0.2.0' });
+  const server = new McpServer({ name: 'craftrig', version: '0.3.0' }, { capabilities: { logging: {} } });
   const autopilot = deps.autopilotService ?? new AutopilotService(deps.taskService, deps.maxParallelTasks, deps.gitChangesReader);
   const evidenceQuotaBytes = deps.evidenceQuotaBytes ?? 50 * 1024 * 1024;
   const assertWorkspacePaths = async (paths: readonly string[]) => {
@@ -393,13 +405,15 @@ export function createMcpServer(deps: Dependencies): McpServer {
       ownedPaths: z.array(ownedPathSchema).max(200).optional(),
       leaseTimeoutMinutes: z.number().int().min(1).max(180).optional()
     })
-  }, async input => { try {
-    const normalized = toClaimTaskInput(input);
-    if (normalized.ownedPaths) await assertWorkspacePaths(normalized.ownedPaths);
-    const task = await deps.taskService.claimTask(normalized.taskId, normalized.agentId, normalized.ownedPaths, normalized.leaseTimeoutMs);
-    await deps.checklistWriter.write(task.planId);
-    return result(task);
-  } catch (error) { return errorResult(error); } });
+  }, async input => {
+    try {
+      const normalized = toClaimTaskInput(input);
+      if (normalized.ownedPaths) await assertWorkspacePaths(normalized.ownedPaths);
+      const task = await deps.taskService.claimTask(normalized.taskId, normalized.agentId, normalized.ownedPaths, normalized.leaseTimeoutMs);
+      await deps.checklistWriter.write(task.planId);
+      return result(task);
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('claim_ready_batch', {
     description: 'Atomically claim multiple ready tasks simultaneously for a swarm of parallel agents. Validates dependencies and partitions file locks without starvation or race conditions.',
@@ -413,15 +427,17 @@ export function createMcpServer(deps: Dependencies): McpServer {
         leaseTimeoutMinutes: z.number().int().min(1).max(180).optional()
       })).min(1).max(20)
     })
-  }, async input => { try {
-    const normalized = toClaimReadyBatchInput(input);
-    for (const claim of normalized.claims) {
-      if (claim.ownedPaths) await assertWorkspacePaths(claim.ownedPaths);
-    }
-    const batchResult = await deps.taskService.claimReadyBatch(normalized.planId, normalized.claims);
-    const checklistPath = await deps.checklistWriter.write(normalized.planId);
-    return result({ ...batchResult, checklistPath });
-  } catch (error) { return errorResult(error); } });
+  }, async input => {
+    try {
+      const normalized = toClaimReadyBatchInput(input);
+      for (const claim of normalized.claims) {
+        if (claim.ownedPaths) await assertWorkspacePaths(claim.ownedPaths);
+      }
+      const batchResult = await deps.taskService.claimReadyBatch(normalized.planId, normalized.claims);
+      const checklistPath = await deps.checklistWriter.write(normalized.planId);
+      return result({ ...batchResult, checklistPath });
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('heartbeat_task', {
     description: 'Send a heartbeat for an active in-progress task lease. Extends the expiration timestamp to prevent auto-recovery during long-running tasks.',
@@ -431,54 +447,177 @@ export function createMcpServer(deps: Dependencies): McpServer {
       agentId: z.string().min(1).max(100),
       extendMinutes: z.number().int().min(1).max(180).default(15)
     })
-  }, async ({ taskId, agentId, extendMinutes }) => { try {
-    const task = await deps.taskService.heartbeatTask(taskId, agentId, extendMinutes * 60 * 1000);
-    return result(task);
-  } catch (error) { return errorResult(error); } });
+  }, async ({ taskId, agentId, extendMinutes }) => {
+    try {
+      const task = await deps.taskService.heartbeatTask(taskId, agentId, extendMinutes * 60 * 1000);
+      return result(task);
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('acquire_file_locks', {
     description: 'Acquire exclusive path-level write locks for a claimed in-progress task. Rejects conflicting or overlapping paths held by another active task.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200) })
-  }, async ({ taskId, agentId, paths }) => { try {
-    await assertWorkspacePaths(paths);
-    const acquired = await deps.taskService.acquireFileLocks(taskId, agentId, paths);
-    const checklistPath = await deps.checklistWriter.write(acquired.task.planId);
-    return result({ ...acquired, checklistPath });
-  } catch (error) { return errorResult(error); } });
+  }, async ({ taskId, agentId, paths }) => {
+    try {
+      await assertWorkspacePaths(paths);
+      const acquired = await deps.taskService.acquireFileLocks(taskId, agentId, paths);
+      const checklistPath = await deps.checklistWriter.write(acquired.task.planId);
+      return result({ ...acquired, checklistPath });
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('release_file_locks', {
     description: 'Release path-level file locks owned by the claiming agent on an in-progress task (or all locks held by that task when paths is omitted).',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ taskId: z.string().uuid(), agentId: z.string().min(1).max(100), paths: z.array(ownedPathSchema).min(1).max(200).optional() })
-  }, async input => { try {
-    const normalized = toReleaseFileLocksInput(input);
-    if (normalized.paths) await assertWorkspacePaths(normalized.paths);
-    const released = await deps.taskService.releaseFileLocks(normalized.taskId, normalized.agentId, normalized.paths);
-    const checklistPath = await deps.checklistWriter.write(released.task.planId);
-    return result({ ...released, checklistPath });
-  } catch (error) { return errorResult(error); } });
+  }, async input => {
+    try {
+      const normalized = toReleaseFileLocksInput(input);
+      if (normalized.paths) await assertWorkspacePaths(normalized.paths);
+      const released = await deps.taskService.releaseFileLocks(normalized.taskId, normalized.agentId, normalized.paths);
+      const checklistPath = await deps.checklistWriter.write(released.task.planId);
+      return result({ ...released, checklistPath });
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('list_file_locks', {
     description: 'List active path-level file locks, optionally filtered by planId, taskId, or overlapping workspace path.',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid().optional(), taskId: z.string().uuid().optional(), path: ownedPathSchema.optional() })
-  }, async input => { try {
-    const filter = toListFileLocksFilter(input);
-    if (filter.path !== undefined) deps.guard.resolveInsideWorkspace(filter.path);
-    return result(await deps.taskService.listFileLocks(filter));
-  } catch (error) { return errorResult(error); } });
+  }, async input => {
+    try {
+      const filter = toListFileLocksFilter(input);
+      if (filter.path !== undefined) deps.guard.resolveInsideWorkspace(filter.path);
+      return result(await deps.taskService.listFileLocks(filter));
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('recover_stale_locks', {
     description: 'Recover stale or orphaned file locks held by completed/failed tasks or abandoned agent leases.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid().optional(), maxAgeMinutes: z.number().int().min(1).max(1440).optional() })
-  }, async ({ planId, maxAgeMinutes }) => { try {
-    const maxAgeMs = (maxAgeMinutes ?? 30) * 60 * 1000;
-    const recovered = await deps.taskService.recoverStaleLocks(planId, maxAgeMs);
-    const checklistPath = planId ? await deps.checklistWriter.write(planId) : null;
-    return result({ ...recovered, checklistPath });
-  } catch (error) { return errorResult(error); } });
+  }, async ({ planId, maxAgeMinutes }) => {
+    try {
+      const maxAgeMs = (maxAgeMinutes ?? 30) * 60 * 1000;
+      const recovered = await deps.taskService.recoverStaleLocks(planId, maxAgeMs);
+      const checklistPath = planId ? await deps.checklistWriter.write(planId) : null;
+      return result({ ...recovered, checklistPath });
+    } catch (error) { return errorResult(error); }
+  });
+
+  registerToolWithAlias('check_file_sync', {
+    description: 'Optimistic concurrency pre-edit/pre-save guard. Checks target workspace paths against active file locks (case-insensitive) and on-disk SHA-256/mtime drift relative to the lock baseline so agents reload stale buffers instead of triggering IDE Compare/Overwrite conflicts.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      paths: z.array(ownedPathSchema).min(1).max(200),
+      taskId: z.string().uuid().optional(),
+      agentId: z.string().min(1).max(100).optional()
+    })
+  }, async (input, ctx) => {
+    try {
+      await assertWorkspacePaths(input.paths);
+      const syncReport = await deps.taskService.checkFileSync({
+        paths: input.paths,
+        ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+        ...(input.agentId !== undefined ? { agentId: input.agentId } : {})
+      });
+      if (!syncReport.allSafeToWrite) {
+        await emitLog(ctx, 'warning', { event: 'file_sync_conflict', conflictsCount: syncReport.conflictsCount });
+      }
+      return result(syncReport);
+    } catch (error) { return errorResult(error); }
+  });
+
+  registerToolWithAlias('doctor', {
+    description: 'Run a one-shot Craftrig superpowers workspace diagnostic: checks active/expired file locks, on-disk drift (Compare/Overwrite risk), IDE watcher exclusions for .craftrig/**, storage health, git working tree state, and MCP tool-name compliance.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({ planId: z.string().uuid().optional() })
+  }, async ({ planId }, ctx) => {
+    try {
+      const locks = await deps.taskService.listFileLocks(planId ? { planId } : undefined);
+      const nowMs = Date.now();
+      const expiredLocks = locks.filter(l => l.expiresAt && nowMs > Date.parse(l.expiresAt));
+      const driftedLocks: Array<{ path: string; status: string; detail: string }> = [];
+      for (const lock of locks) {
+        const check = await deps.taskService.checkFileSync({ paths: [lock.path], taskId: lock.taskId });
+        for (const entry of check.files) {
+          if (entry.status === 'drifted_on_disk' || entry.status === 'deleted_on_disk') {
+            driftedLocks.push({ path: entry.path, status: entry.status, detail: entry.detail });
+          }
+        }
+      }
+
+      let hasCraftrigWatcherExclude = false;
+      try {
+        const vscodeSettingsRaw = await readFile(path.join(deps.workspaceRoot, '.vscode', 'settings.json'), 'utf8');
+        hasCraftrigWatcherExclude = /["']\*\*\/\.craftrig\/\*\*["']\s*:\s*true/.test(vscodeSettingsRaw);
+      } catch {
+        hasCraftrigWatcherExclude = false;
+      }
+
+      const storageStats = await deps.taskService.getStorageStats();
+      const gitState = deps.gitChangesReader
+        ? await deps.gitChangesReader.readWorkingTreeChanges().catch(() => ({ isGitRepo: false, changedFiles: [] }))
+        : { isGitRepo: false, changedFiles: [] };
+
+      const registeredToolNames = Object.keys(((server as unknown) as { _registeredTools?: Record<string, unknown> })._registeredTools ?? {});
+      const invalidToolNames = registeredToolNames.filter(name => !/^[a-zA-Z0-9_-]{1,50}$/.test(name));
+
+      const compareOverwriteRisk: 'none' | 'low' | 'high' =
+        driftedLocks.length > 0 || expiredLocks.length > 0
+          ? 'high'
+          : !hasCraftrigWatcherExclude
+            ? 'low'
+            : 'none';
+
+      const recommendations: string[] = [];
+      if (driftedLocks.length > 0) {
+        recommendations.push(`Reload ${driftedLocks.length} externally modified file(s) before saving: ${driftedLocks.map(d => d.path).join(', ')}`);
+      }
+      if (expiredLocks.length > 0) {
+        recommendations.push(`Run craftrig_recover_stale_locks to clear ${expiredLocks.length} expired lease lock(s).`);
+      }
+      if (!hasCraftrigWatcherExclude) {
+        recommendations.push('Add `"files.watcherExclude": { "**/.craftrig/**": true }` to `.vscode/settings.json` to silence IDE watcher churn on Craftrig state/checklist/evidence files.');
+      }
+
+      await emitLog(ctx, compareOverwriteRisk === 'high' ? 'warning' : 'info', {
+        event: 'craftrig_doctor',
+        compareOverwriteRisk,
+        activeLocks: locks.length,
+        driftedLocks: driftedLocks.length
+      });
+
+      return result({
+        workspaceRoot: deps.workspaceRoot,
+        compareOverwriteRisk,
+        locks: {
+          activeCount: locks.length,
+          expiredCount: expiredLocks.length,
+          driftedFiles: driftedLocks.map(d => ({ path: d.path, status: d.status, detail: d.detail }))
+        },
+        ideWatcherHygiene: {
+          hasCraftrigWatcherExclude,
+          recommendedSettingsSnippet: {
+            'files.watcherExclude': { '**/.craftrig/**': true },
+            'search.exclude': { '**/.craftrig/**': true }
+          }
+        },
+        storage: storageStats,
+        git: {
+          isGitRepo: gitState.isGitRepo,
+          uncommittedCount: gitState.changedFiles.length,
+          sampleFiles: gitState.changedFiles.slice(0, 15)
+        },
+        tools: {
+          totalRegistered: registeredToolNames.length,
+          invalidToolNames
+        },
+        recommendations
+      });
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('complete_task', {
     description: 'Complete, block, or fail a claimed task. Completed tasks that require evidence must include at least one existing evidence ID. Optionally attach a structured handoff (summary, changedFiles, contracts, decisions, testsRun) so downstream subagents receive concise context without transcript bloat.',
@@ -490,28 +629,32 @@ export function createMcpServer(deps: Dependencies): McpServer {
       reason: z.string().max(2000).nullable().optional(),
       handoff: handoffSchema.nullable().optional()
     })
-  }, async ({ taskId, status, evidenceIds, reason, handoff }) => { try {
-    const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null, handoff ?? null);
-    const checklistPath = await deps.checklistWriter.write(task.planId);
-    if (status === 'completed') {
-      const snapshot = await deps.taskService.getPlan(task.planId);
-      const allCompleted = snapshot.tasks.length > 0 && snapshot.tasks.every(t => t.status === 'completed');
-      if (allCompleted) {
-        const conventionalCommit = await deps.taskService.buildConventionalCommit(task.planId);
-        return result({ task, checklistPath, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
+  }, async ({ taskId, status, evidenceIds, reason, handoff }) => {
+    try {
+      const task = await deps.taskService.completeTask(taskId, status, evidenceIds, reason ?? null, handoff ?? null);
+      const checklistPath = await deps.checklistWriter.write(task.planId);
+      if (status === 'completed') {
+        const snapshot = await deps.taskService.getPlan(task.planId);
+        const allCompleted = snapshot.tasks.length > 0 && snapshot.tasks.every(t => t.status === 'completed');
+        if (allCompleted) {
+          const conventionalCommit = await deps.taskService.buildConventionalCommit(task.planId);
+          return result({ task, checklistPath, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
+        }
       }
-    }
-    return result({ task, checklistPath });
-  } catch (error) { return errorResult(error); } });
+      return result({ task, checklistPath });
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('record_evidence', {
     description: 'Record auditable evidence for a plan or task. Evidence paths must be workspace-relative; do not record an assertion as evidence without an artifact or reproducible source.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), kind: z.enum(['browser-report', 'screenshot', 'test-report', 'build-log', 'security-report', 'manual-review', 'other']), title: z.string().min(1).max(200), description: z.string().max(4000), path: z.string().nullable().optional(), uri: z.string().url().refine(value => value.startsWith('https://'), 'Evidence URI must use HTTPS.').nullable().optional(), metadata: z.record(z.string(), z.unknown()).default({}), createdBy: z.string().min(1).max(100) })
-  }, async input => { try {
-    const safePath = input.path ? path.relative(deps.workspaceRoot, await deps.guard.resolveExistingFileInsideWorkspace(input.path)) : null;
-    return result(await deps.taskService.recordEvidence({ ...input, path: safePath, planId: input.planId ?? null, taskId: input.taskId ?? null, uri: input.uri ?? null }));
-  } catch (error) { return errorResult(error); } });
+  }, async input => {
+    try {
+      const safePath = input.path ? path.relative(deps.workspaceRoot, await deps.guard.resolveExistingFileInsideWorkspace(input.path)) : null;
+      return result(await deps.taskService.recordEvidence({ ...input, path: safePath, planId: input.planId ?? null, taskId: input.taskId ?? null, uri: input.uri ?? null }));
+    } catch (error) { return errorResult(error); }
+  });
 
   registerToolWithAlias('update_quality_checkpoint', {
     description: 'Update one quality checkpoint. PASS requires evidence IDs. NOT_APPLICABLE requires an explicit rationale. Use FAIL or BLOCKED when a criterion is not met.',
@@ -645,69 +788,78 @@ export function createMcpServer(deps: Dependencies): McpServer {
     description: 'Stop only a development server process started and tracked by this MCP process. Emits a Conventional Commits 1.0.0 message (no push) for any workspace changes.',
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
     inputSchema: z.object({ processId: z.string().uuid() })
-  }, async ({ processId }) => { try {
-    const stopped = await deps.devServer.stop(processId);
-    const conventionalCommit = await buildToolCommitSummary({
-      fallbackTitle: 'verify localhost runtime changes',
-      fallbackSummary: 'Completed local dev server inspection and stopped tracked process',
-      fallbackScope: 'localhost',
-      fallbackType: 'chore'
-    });
-    return result({ ...stopped, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
-  } catch (error) { return errorResult(error); } });
+  }, async ({ processId }) => {
+    try {
+      const stopped = await deps.devServer.stop(processId);
+      const conventionalCommit = await buildToolCommitSummary({
+        fallbackTitle: 'verify localhost runtime changes',
+        fallbackSummary: 'Completed local dev server inspection and stopped tracked process',
+        fallbackScope: 'localhost',
+        fallbackType: 'chore'
+      });
+      return result({ ...stopped, conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT });
+    } catch (error) { return errorResult(error); }
+  });
 
   server.registerTool('localhost_inspect_responsive', {
     description: 'Open a localhost website using Playwright. Inspect each route across the default 13 viewport profiles or supplied profiles; collect lean JPEG screenshots (failures-only by default, SHA-256 deduplicated), DOM overflow metrics + metricsHash, console/page/network errors, and a JSON report. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), routes: z.array(z.string()).default(['/']), viewports: z.array(viewportSchema).optional(), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowedOverflowSelectors: z.array(z.string()).default([]), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('responsive-qa-agent') })
-  }, async input => { try {
-    const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
-    const report = await deps.inspector.inspectResponsive({ baseUrl: input.baseUrl, routes: input.routes, viewports: input.viewports ?? [], evidenceDirectory, timeoutMs: input.timeoutMs, allowedOverflowSelectors: input.allowedOverflowSelectors, captureScreenshots: input.captureScreenshots });
-    const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Responsive inspection: ${report.runId}`, description: `${report.passedCases}/${report.totalCases} route/viewport cases passed. Overall: ${report.overallStatus}.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { runId: report.runId, overallStatus: report.overallStatus, passedCases: report.passedCases, failedCases: report.failedCases, results: report.results.map(item => ({ route: item.route, viewport: item.viewport.name, passed: item.passed, metricsHash: item.metricsHash, issues: item.issues })) }, createdBy: input.createdBy });
-    const protectedRel = await deps.taskService.getProtectedEvidencePaths();
-    const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
-    protectedAbs.add(path.resolve(report.reportPath));
-    await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
-    const conventionalCommit = report.overallStatus === 'pass'
-      ? await buildToolCommitSummary({
+  }, async (input, ctx) => {
+    try {
+      if (isRequestAborted(ctx)) return errorResult(new Error('Request was cancelled before responsive inspection started.'));
+      await emitProgress(ctx, 0, 2, `Running responsive inspection across ${input.routes.length} route(s)...`);
+      const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
+      const report = await deps.inspector.inspectResponsive({ baseUrl: input.baseUrl, routes: input.routes, viewports: input.viewports ?? [], evidenceDirectory, timeoutMs: input.timeoutMs, allowedOverflowSelectors: input.allowedOverflowSelectors, captureScreenshots: input.captureScreenshots });
+      await emitProgress(ctx, 2, 2, `Responsive inspection complete: ${report.passedCases}/${report.totalCases} passed (${report.overallStatus}).`);
+      const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Responsive inspection: ${report.runId}`, description: `${report.passedCases}/${report.totalCases} route/viewport cases passed. Overall: ${report.overallStatus}.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { runId: report.runId, overallStatus: report.overallStatus, passedCases: report.passedCases, failedCases: report.failedCases, results: report.results.map(item => ({ route: item.route, viewport: item.viewport.name, passed: item.passed, metricsHash: item.metricsHash, issues: item.issues })) }, createdBy: input.createdBy });
+      const protectedRel = await deps.taskService.getProtectedEvidencePaths();
+      const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
+      protectedAbs.add(path.resolve(report.reportPath));
+      await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
+      const conventionalCommit = report.overallStatus === 'pass'
+        ? await buildToolCommitSummary({
           planId: input.planId ?? null,
           fallbackTitle: 'verify responsive layout across viewports',
           fallbackSummary: `Responsive QA passed (${report.passedCases}/${report.totalCases} cases across ${report.routeCount} route(s))`,
           fallbackScope: 'responsive',
           fallbackType: 'test'
         })
-      : undefined;
-    return result({
-      ...report,
-      evidenceId: evidence.id,
-      ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
-      nextAction: report.overallStatus === 'pass' ? 'Record responsive checkpoint as PASS with this evidence ID, then continue to layout inspection.' : 'Diagnose failed route/viewport cases, repair source code, then rerun this tool. Do not mark responsive PASS.'
-    });
-  } catch (error) { return errorResult(error); } });
+        : undefined;
+      return result({
+        ...report,
+        evidenceId: evidence.id,
+        ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
+        nextAction: report.overallStatus === 'pass' ? 'Record responsive checkpoint as PASS with this evidence ID, then continue to layout inspection.' : 'Diagnose failed route/viewport cases, repair source code, then rerun this tool. Do not mark responsive PASS.'
+      });
+    } catch (error) { return errorResult(error); }
+  });
 
   server.registerTool('localhost_run_interaction_scenario', {
     description: 'Run an explicit, bounded interaction scenario on localhost using Playwright. Supports click/fill/check/select/press/visibility/text assertions. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
     inputSchema: z.object({ baseUrl: z.string().url(), route: z.string().default('/'), actions: z.array(actionSchema).min(1).max(100), timeoutMs: z.number().int().min(1000).max(120000).default(deps.browserTimeoutMs), allowRiskyActions: z.boolean().default(false), captureScreenshots: z.enum(captureModes).default('failures-only'), planId: z.string().uuid().nullable().optional(), taskId: z.string().uuid().nullable().optional(), createdBy: z.string().default('functional-qa-agent') })
-  }, async input => { try {
-    const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
-    const report = await deps.inspector.runInteractionScenario({ baseUrl: input.baseUrl, route: input.route, actions: toInteractionActions(input.actions), evidenceDirectory, timeoutMs: input.timeoutMs, allowRiskyActions: input.allowRiskyActions, captureScreenshots: input.captureScreenshots });
-    const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Interaction scenario: ${report.runId}`, description: `${report.steps.filter(step => step.status === 'pass').length}/${report.steps.length} interaction steps passed.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { passed: report.passed, metricsHash: report.metricsHash, steps: report.steps }, createdBy: input.createdBy });
-    const conventionalCommit = report.passed
-      ? await buildToolCommitSummary({
+  }, async input => {
+    try {
+      const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
+      const report = await deps.inspector.runInteractionScenario({ baseUrl: input.baseUrl, route: input.route, actions: toInteractionActions(input.actions), evidenceDirectory, timeoutMs: input.timeoutMs, allowRiskyActions: input.allowRiskyActions, captureScreenshots: input.captureScreenshots });
+      const evidence = await deps.taskService.recordEvidence({ planId: input.planId ?? null, taskId: input.taskId ?? null, kind: 'browser-report', title: `Interaction scenario: ${report.runId}`, description: `${report.steps.filter(step => step.status === 'pass').length}/${report.steps.length} interaction steps passed.`, path: path.relative(deps.workspaceRoot, report.reportPath), uri: null, metadata: { passed: report.passed, metricsHash: report.metricsHash, steps: report.steps }, createdBy: input.createdBy });
+      const conventionalCommit = report.passed
+        ? await buildToolCommitSummary({
           planId: input.planId ?? null,
           fallbackTitle: `verify interaction flow on ${input.route}`,
           fallbackSummary: `Interaction scenario passed (${report.steps.length} step(s) on ${input.route})`,
           fallbackScope: 'ui',
           fallbackType: 'test'
         })
-      : undefined;
-    return result({
-      ...report,
-      evidenceId: evidence.id,
-      ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {})
-    });
-  } catch (error) { return errorResult(error); } });
+        : undefined;
+      return result({
+        ...report,
+        evidenceId: evidence.id,
+        ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {})
+      });
+    } catch (error) { return errorResult(error); }
+  });
 
   server.registerTool('localhost_audit_visual_a11y', {
     description: 'Run automated dual-theme (light/dark) visual, contrast (@axe-core/playwright + alpha-composited DOM guard), typography, occlusion, target-size, reduced-motion, and ARIA snapshot audit on localhost. On PASS, emits a Conventional Commits 1.0.0 message (no push).',
@@ -726,71 +878,76 @@ export function createMcpServer(deps: Dependencies): McpServer {
       taskId: z.string().uuid().nullable().optional(),
       createdBy: z.string().default('accessibility-qa-agent')
     })
-  }, async input => { try {
-    const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
-    const report = await deps.inspector.auditVisualA11y(toVisualA11yAuditInput({
-      baseUrl: input.baseUrl,
-      routes: input.routes,
-      colorSchemes: input.colorSchemes,
-      viewports: input.viewports,
-      expectedSectionPolarity: input.expectedSectionPolarity,
-      themeToggleSelector: input.themeToggleSelector,
-      testReducedMotion: input.testReducedMotion,
-      captureScreenshots: input.captureScreenshots,
-      evidenceDirectory,
-      timeoutMs: input.timeoutMs
-    }));
-    const evidence = await deps.taskService.recordEvidence({
-      planId: input.planId ?? null,
-      taskId: input.taskId ?? null,
-      kind: 'browser-report',
-      title: `Visual & A11y audit: ${report.runId}`,
-      description: `${report.passedCases}/${report.totalCases} cases passed across [${report.testedColorSchemes.join(', ')}]. Contrast violations: ${report.totalContrastViolations}, axe violations: ${report.totalAxeViolations}, incomplete contrast: ${report.totalIncompleteContrast}.`,
-      path: path.relative(deps.workspaceRoot, report.reportPath),
-      uri: null,
-      metadata: {
-        auditType: 'visual-a11y',
-        runId: report.runId,
-        overallStatus: report.overallStatus,
-        testedColorSchemes: report.testedColorSchemes,
-        expectedColorSchemes: input.colorSchemes,
-        totalContrastViolations: report.totalContrastViolations,
-        totalAxeViolations: report.totalAxeViolations,
-        totalIncompleteContrast: report.totalIncompleteContrast,
-        themeToggleCheck: report.themeToggleCheck,
-        results: report.results.map(item => ({
-          route: item.route,
-          colorScheme: item.colorScheme,
-          viewport: item.viewport.name,
-          passed: item.passed,
-          metricsHash: item.metricsHash,
-          issues: item.issues
-        }))
-      },
-      createdBy: input.createdBy
-    });
-    const protectedRel = await deps.taskService.getProtectedEvidencePaths();
-    const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
-    protectedAbs.add(path.resolve(report.reportPath));
-    await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
-    const conventionalCommit = report.overallStatus === 'pass'
-      ? await buildToolCommitSummary({
+  }, async (input, ctx) => {
+    try {
+      if (isRequestAborted(ctx)) return errorResult(new Error('Request was cancelled before visual-a11y audit started.'));
+      await emitProgress(ctx, 0, 2, `Running visual & accessibility audit across ${input.routes.length} route(s)...`);
+      const evidenceDirectory = await deps.guard.ensureEvidenceDirectory();
+      const report = await deps.inspector.auditVisualA11y(toVisualA11yAuditInput({
+        baseUrl: input.baseUrl,
+        routes: input.routes,
+        colorSchemes: input.colorSchemes,
+        viewports: input.viewports,
+        expectedSectionPolarity: input.expectedSectionPolarity,
+        themeToggleSelector: input.themeToggleSelector,
+        testReducedMotion: input.testReducedMotion,
+        captureScreenshots: input.captureScreenshots,
+        evidenceDirectory,
+        timeoutMs: input.timeoutMs
+      }));
+      await emitProgress(ctx, 2, 2, `Visual & A11y audit complete: ${report.passedCases}/${report.totalCases} passed (${report.overallStatus}).`);
+      const evidence = await deps.taskService.recordEvidence({
+        planId: input.planId ?? null,
+        taskId: input.taskId ?? null,
+        kind: 'browser-report',
+        title: `Visual & A11y audit: ${report.runId}`,
+        description: `${report.passedCases}/${report.totalCases} cases passed across [${report.testedColorSchemes.join(', ')}]. Contrast violations: ${report.totalContrastViolations}, axe violations: ${report.totalAxeViolations}, incomplete contrast: ${report.totalIncompleteContrast}.`,
+        path: path.relative(deps.workspaceRoot, report.reportPath),
+        uri: null,
+        metadata: {
+          auditType: 'visual-a11y',
+          runId: report.runId,
+          overallStatus: report.overallStatus,
+          testedColorSchemes: report.testedColorSchemes,
+          expectedColorSchemes: input.colorSchemes,
+          totalContrastViolations: report.totalContrastViolations,
+          totalAxeViolations: report.totalAxeViolations,
+          totalIncompleteContrast: report.totalIncompleteContrast,
+          themeToggleCheck: report.themeToggleCheck,
+          results: report.results.map(item => ({
+            route: item.route,
+            colorScheme: item.colorScheme,
+            viewport: item.viewport.name,
+            passed: item.passed,
+            metricsHash: item.metricsHash,
+            issues: item.issues
+          }))
+        },
+        createdBy: input.createdBy
+      });
+      const protectedRel = await deps.taskService.getProtectedEvidencePaths();
+      const protectedAbs = new Set([...protectedRel].map(rel => path.resolve(deps.workspaceRoot, rel)));
+      protectedAbs.add(path.resolve(report.reportPath));
+      await enforceEvidenceQuota(evidenceDirectory, evidenceQuotaBytes, protectedAbs).catch(() => undefined);
+      const conventionalCommit = report.overallStatus === 'pass'
+        ? await buildToolCommitSummary({
           planId: input.planId ?? null,
           fallbackTitle: 'verify visual contrast and accessibility',
           fallbackSummary: `Visual & A11y audit passed (${report.passedCases}/${report.totalCases} cases across [${report.testedColorSchemes.join(', ')}])`,
           fallbackScope: 'a11y',
           fallbackType: 'test'
         })
-      : undefined;
-    return result({
-      ...report,
-      evidenceId: evidence.id,
-      ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
-      nextAction: report.overallStatus === 'pass'
-        ? 'Review any incompleteContrast items over gradients/canvases, then use this evidence ID for typography-color and accessibility checkpoints.'
-        : 'Fix every contrast, polarity, axe, typography, occlusion, or reduced-motion defect and rerun localhost_audit_visual_a11y. Do not pass checkpoints yet.'
-    });
-  } catch (error) { return errorResult(error); } });
+        : undefined;
+      return result({
+        ...report,
+        evidenceId: evidence.id,
+        ...(conventionalCommit ? { conventionalCommit, finalOutputRequirement: FINAL_OUTPUT_REQUIREMENT } : {}),
+        nextAction: report.overallStatus === 'pass'
+          ? 'Review any incompleteContrast items over gradients/canvases, then use this evidence ID for typography-color and accessibility checkpoints.'
+          : 'Fix every contrast, polarity, axe, typography, occlusion, or reduced-motion defect and rerun localhost_audit_visual_a11y. Do not pass checkpoints yet.'
+      });
+    } catch (error) { return errorResult(error); }
+  });
 
   const registerResourceWithAlias = (name: string, pathSegment: string, meta: { title: string; description: string; mimeType: string }, handler: (uri: URL) => Promise<any>) => {
     server.registerResource(`${name}-craftrig`, `craftrig://${pathSegment}`, meta, handler);

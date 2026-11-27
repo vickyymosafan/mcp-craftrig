@@ -41,14 +41,15 @@ export function normalizeOwnedPath(rawPath: string): string {
   return resolvedSegments.join('/');
 }
 
-/** Normalize and deduplicate a list of workspace-relative paths while preserving order. */
+/** Normalize and deduplicate a list of workspace-relative paths (case-insensitive on overlap) while preserving order. */
 export function normalizeOwnedPaths(paths: readonly string[]): string[] {
   const unique: string[] = [];
   const seen = new Set<string>();
   for (const rawPath of paths) {
     const normalized = normalizeOwnedPath(rawPath);
-    if (!seen.has(normalized)) {
-      seen.add(normalized);
+    const key = normalized.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
       unique.push(normalized);
     }
   }
@@ -57,13 +58,16 @@ export function normalizeOwnedPaths(paths: readonly string[]): string[] {
 
 /**
  * Determine whether two canonical workspace-relative POSIX paths conflict
- * (exact match or ancestor/descendant directory containment).
+ * (case-insensitive exact match or ancestor/descendant directory containment,
+ * protecting Windows NTFS and macOS APFS case-insensitive filesystems).
  */
 export function pathsOverlap(firstPath: string, secondPath: string): boolean {
-  if (firstPath === secondPath) {
+  const a = firstPath.toLowerCase();
+  const b = secondPath.toLowerCase();
+  if (a === b) {
     return true;
   }
-  return firstPath.startsWith(`${secondPath}/`) || secondPath.startsWith(`${firstPath}/`);
+  return a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
 /**

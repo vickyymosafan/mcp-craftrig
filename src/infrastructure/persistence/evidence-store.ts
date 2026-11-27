@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
+import { writeFileAtomicIfChanged } from './atomic-file-writer.js';
 
 export interface SavedBlobResult {
   path: string;
@@ -44,7 +45,7 @@ export async function saveContentAddressedBlob(
   if (existsSync(targetPath)) {
     return { path: targetPath, sha256, bytes: buffer.length, deduplicated: true };
   }
-  await writeFile(targetPath, buffer);
+  await writeFileAtomicIfChanged(targetPath, buffer, { skipIfUnchanged: true });
   return { path: targetPath, sha256, bytes: buffer.length, deduplicated: false };
 }
 
@@ -145,7 +146,7 @@ export async function archivePlanSnapshot(
     }
   });
   const archivePath = path.join(dir, `${planId}.json.br`);
-  await writeFile(archivePath, compressed);
+  await writeFileAtomicIfChanged(archivePath, compressed, { skipIfUnchanged: true });
   return {
     archivePath,
     rawBytes: raw.length,

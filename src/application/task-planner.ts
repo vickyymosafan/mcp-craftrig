@@ -133,21 +133,21 @@ export class TaskPlanner {
         description: 'Inspect every supplied route across the viewport matrix, collect screenshots and DOM metrics, repair defects, then re-run affected profiles until PASS or BLOCKED.',
         ownerRole: 'responsive-qa-agent', skillIds: ['responsive-first-browser-qa', 'local-development-runtime'],
         moduleIds: [9, 15, 18, 39, 42, 43, 63], domains: ['responsive'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
-        recommendedPaths: ['tests/e2e', 'evidence/screenshots']
+        recommendedPaths: ['tests/e2e/responsive', 'evidence/responsive']
       });
       const layout = add({
         title: 'Inspect and repair layout and visual structure',
         description: 'Audit hierarchy, alignment, spacing, overflow, clipping, composition and design-system consistency.',
         ownerRole: 'visual-qa-agent', skillIds: ['ui-layout-repair', 'design-direction'], moduleIds: [13, 15, 17, 18, 22, 61, 63],
         domains: ['design'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
-        recommendedPaths: ['evidence/screenshots', 'src/styles']
+        recommendedPaths: ['evidence/layout', 'src/styles']
       });
       const interaction = add({
         title: 'Inspect functional interaction states',
         description: 'Test navigation, forms, controls, keyboard and touch interactions with explicit non-destructive scenarios.',
         ownerRole: 'functional-qa-agent', skillIds: ['interaction-functional-qa'], moduleIds: [15, 18, 34, 60, 63],
         domains: ['frontend'], dependsOn: [integrateTask], parallelGroup: 'qa-wave', requiredEvidence: true,
-        recommendedPaths: ['tests/e2e', 'evidence/interaction']
+        recommendedPaths: ['tests/e2e/interaction', 'evidence/interaction']
       });
       const visual = add({
         title: 'Inspect typography, color and motion',
