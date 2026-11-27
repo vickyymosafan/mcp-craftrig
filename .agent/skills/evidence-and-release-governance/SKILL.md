@@ -12,5 +12,5 @@ compatibility: Works with Agent Skills-compatible hosts and the Craftrig MCP ser
 4. Invalidate evidence when source, dependencies, environment, browser profile, or relevant configuration changes.
 5. Do not let the implementation agent be the sole verifier of its own changes.
 6. Evaluate every required quality checkpoint before release.
-7. Prepare a decision packet with changed files, test results, screenshots, known issues, risk, rollback plan, and required approvals.
-8. Do not deploy or perform external side effects without explicit user authorization.
+7. Prepare a decision packet with changed files, test results, screenshots, known issues, risk, rollback plan, required approvals, and a Conventional Commits 1.0.0 commit message summarizing the changes (`craftrig_prepare_commit_message` / gate output).
+8. Do not run `git push`, deploy, or perform external side effects without explicit user authorization.

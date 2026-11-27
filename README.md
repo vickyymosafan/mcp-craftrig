@@ -138,7 +138,8 @@ claude mcp add craftrig -- node d:/craftrig/dist/src/index.js
 | `craftrig_release_file_locks` | Concurrency | Releases acquired file locks upon task completion or step handover. |
 | `craftrig_recover_stale_locks` | Recovery | Reclaims orphaned locks left by completed, failed, or timed-out tasks. |
 | `craftrig_record_evidence` | Verification | Records auditable evidence (test reports, screenshots, build logs). |
-| `craftrig_evaluate_quality_gate` | Quality Gate | Assesses all required acceptance criteria checkpoints before release. |
+| `craftrig_evaluate_quality_gate` | Quality Gate | Assesses all required acceptance criteria checkpoints before release and emits a Conventional Commits 1.0.0 message on PASS (no push). |
+| `craftrig_prepare_commit_message` | Release | Generates a Conventional Commits 1.0.0 git commit message from plan handoffs or working tree git changes without pushing (`noPush: true`). |
 | `craftrig_archive_plan` | Lean Storage | Brotli-compresses completed plans to `.craftrig/archive/<planId>.json.br` and runs incremental vacuum. |
 | `craftrig_storage_maintenance` | Lean Storage | Reports storage stats, compacts SQLite WAL, and enforces the 50 MB LRU evidence quota. |
 | `localhost_start_dev_server` | Runtime | Starts and monitors local development servers. |

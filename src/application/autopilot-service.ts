@@ -6,8 +6,11 @@ import type {
   TaskHandoff
 } from '../domain/blueprint.js';
 import type { TaskNode } from '../domain/models.js';
+import type { ConventionalCommitArtifact } from '../domain/conventional-commit.js';
+import type { GitChangesReaderPort } from '../domain/ports.js';
 import { pathsOverlap } from '../domain/file-ownership.js';
 import type { TaskService } from './task-service.js';
+import { buildPlanConventionalCommit } from './commit-message-builder.js';
 import { estimateTokens, skillPathFor } from './skill-router.js';
 
 export type AutopilotState = 'dispatch' | 'verify' | 'repair' | 'waiting' | 'needs_human' | 'done';
@@ -61,6 +64,7 @@ export interface AutopilotNextResult {
   gateStatus: { status: 'pass' | 'blocked'; missing: string[]; failed: string[] } | null;
   traceability: RequirementTraceabilityEntry[];
   telemetry: PlanTelemetry | null;
+  conventionalCommit?: ConventionalCommitArtifact | null;
   instructions: string;
 }
 
@@ -99,7 +103,8 @@ export interface CompactTaskPacket {
 export class AutopilotService {
   constructor(
     private readonly taskService: TaskService,
-    private readonly defaultMaxParallelTasks = 4
+    private readonly defaultMaxParallelTasks = 4,
+    private readonly gitChangesReader?: GitChangesReaderPort
   ) {}
 
   async buildCompactPacket(planId: string, taskId: string, maxPacketTokens = 2500): Promise<CompactTaskPacket> {
@@ -437,6 +442,8 @@ export class AutopilotService {
     // 6. All tasks completed -> evaluate quality gate
     const gate = await this.taskService.evaluateGate(planId);
     if (gate.status === 'pass') {
+      const snapshot = await this.taskService.getPlan(planId);
+      const conventionalCommit = gate.conventionalCommit ?? await buildPlanConventionalCommit(snapshot, traceability, this.gitChangesReader);
       return {
         planId,
         state: 'done',
@@ -449,7 +456,8 @@ export class AutopilotService {
         gateStatus: { status: gate.status, missing: gate.missing, failed: gate.failed },
         traceability,
         telemetry: plan.telemetry ?? null,
-        instructions: 'All phases, requirements, and quality checkpoints PASSED with evidence. Present the traceability matrix, telemetry report, and release handoff to the user. Optionally call craftrig_archive_plan to compress state and reclaim disk. Never deploy without explicit user authorization.'
+        conventionalCommit,
+        instructions: 'All phases, requirements, and quality checkpoints PASSED with evidence. MANDATORY: Include conventionalCommit.fullMessage (Conventional Commits 1.0.0) in your final output to summarize all changes — NEVER run git push without explicit user authorization. Present the traceability matrix, telemetry report, and release handoff to the user. Optionally call craftrig_archive_plan to compress state and reclaim disk.'
       };
     }
 

@@ -18,7 +18,7 @@ Own the task graph and final synthesis. Do not implement every workstream yourse
    - Pass structured `handoff` (`summary`, `changedFiles`, `contracts`, `decisions`, `testsRun`) to `craftrig_complete_task` so downstream phases receive compact contracts instead of raw transcripts.
    - Do NOT stop after landing page or Phase 1 — complete every phase through final quality gate and REQ-ID traceability verification.
 4. On crash or restart, call `craftrig_autopilot_resume` to recover expired leases and continue from the exact active wave.
-5. After completion, optionally call `craftrig_archive_plan` to Brotli-compress state and run storage maintenance. Never deploy without explicit user authorization.
+5. After completion, include the generated Conventional Commits 1.0.0 git message (`conventionalCommit.fullMessage`) in your final output without running `git push`, and optionally call `craftrig_archive_plan` to Brotli-compress state and run storage maintenance. Never push or deploy without explicit user authorization.
 
 ## Legacy single-request workflow
 1. Read `AGENTS.md`, `docs/PRINCIPAL_DEVELOPMENT.md`, `docs/ARCHITECTURE.md`, and the relevant project contracts before planning.
@@ -32,7 +32,7 @@ Own the task graph and final synthesis. Do not implement every workstream yourse
 9. For UI work, start or identify the local dev server and run responsive-first localhost inspection before other visual dimensions.
 10. When a defect is found, delegate diagnosis and repair, then independently rerun browser tests. Never trust the repair agent's self-attestation.
 11. Evaluate the quality gate with `craftrig_evaluate_quality_gate`. Do not claim PASS while required checkpoints remain pending, failed, blocked, or unsupported by evidence.
-12. Prepare a human-readable decision packet. Deployment, destructive operations, production data changes, and external side effects require explicit authorization.
+12. Prepare a human-readable decision packet and ALWAYS include a Conventional Commits 1.0.0 git message summarizing the changes (via `craftrig_evaluate_quality_gate` or `craftrig_prepare_commit_message`). Never run `git push`, deploy, mutate production data, or trigger external side effects without explicit authorization.
 
 ## Delegation contract
 Use host-native subagent spawning when available. The MCP server stores task state and evidence; it does not silently create LLM sessions. If the host cannot spawn subagents, execute ready tasks sequentially and disclose the limitation.

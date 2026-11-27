@@ -6,9 +6,11 @@ import { waitForLocalUrl } from '../../infrastructure/runtime/localhost-readines
 import type { TaskService } from '../../application/task-service.js';
 import type { BlueprintArchitectService } from '../../application/blueprint-architect.js';
 import { AutopilotService } from '../../application/autopilot-service.js';
+import { buildPlanConventionalCommit } from '../../application/commit-message-builder.js';
 import { parseMarkdownBlueprint } from '../../application/blueprint-parser.js';
 import { archivePlanSnapshot, enforceEvidenceQuota } from '../../infrastructure/persistence/evidence-store.js';
-import type { BrowserInspectorPort, DevServerPort } from '../../domain/ports.js';
+import { buildConventionalCommit } from '../../domain/conventional-commit.js';
+import type { BrowserInspectorPort, DevServerPort, GitChangesReaderPort } from '../../domain/ports.js';
 import type { ProjectBlueprint } from '../../domain/blueprint.js';
 import type { WorkspaceGuard } from '../../infrastructure/security/workspace-guard.js';
 import type { FileSkillRegistry } from '../../infrastructure/skills/file-skill-registry.js';
@@ -43,7 +45,10 @@ interface Dependencies {
   maxParallelTasks: number;
   browserTimeoutMs: number;
   evidenceQuotaBytes?: number;
+  gitChangesReader?: GitChangesReaderPort;
 }
+
+const commitTypes = ['feat', 'fix', 'refactor', 'docs', 'test', 'build', 'ci', 'perf', 'style', 'chore'] as const;
 
 const workDomains = ['frontend', 'backend', 'design', 'responsive', 'threejs', 'motion', 'security', 'data', 'release'] as const;
 const checkpointIds = ['responsive', 'layout', 'interaction', 'typography-color', 'motion', '3d-rendering', 'accessibility', 'performance', 'security', 'final-regression'] as const;
@@ -108,7 +113,7 @@ function errorResult(error: unknown, recoveryHint?: string) {
 
 export function createMcpServer(deps: Dependencies): McpServer {
   const server = new McpServer({ name: 'craftrig', version: '0.2.0' });
-  const autopilot = deps.autopilotService ?? new AutopilotService(deps.taskService, deps.maxParallelTasks);
+  const autopilot = deps.autopilotService ?? new AutopilotService(deps.taskService, deps.maxParallelTasks, deps.gitChangesReader);
   const evidenceQuotaBytes = deps.evidenceQuotaBytes ?? 50 * 1024 * 1024;
   const assertWorkspacePaths = async (paths: readonly string[]) => {
     await Promise.all(paths.map(target => deps.guard.resolvePotentialPathInsideWorkspace(target)));
@@ -265,6 +270,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
         return errorResult(new Error('ConflictError: Plan still has pending or in_progress tasks. Pass force=true to archive anyway.'));
       }
       const archiveDir = await deps.guard.ensureEvidenceDirectory(path.join('.craftrig', 'archive'));
+      const conventionalCommit = await buildPlanConventionalCommit(snapshot, traceability, deps.gitChangesReader);
       const archiveResult = await archivePlanSnapshot(archiveDir, planId, {
         ...snapshot,
         evidence,
@@ -283,7 +289,9 @@ export function createMcpServer(deps: Dependencies): McpServer {
         compressedBytes: archiveResult.compressedBytes,
         compressionRatio: archiveResult.compressionRatio,
         purged,
-        quotaResult
+        quotaResult,
+        conventionalCommit,
+        finalOutputRequirement: 'MANDATORY: Include conventionalCommit.fullMessage in your final output to summarize the changes. Do NOT run git push without explicit user authorization.'
       });
     } catch (error) {
       return errorResult(error);
@@ -462,10 +470,60 @@ export function createMcpServer(deps: Dependencies): McpServer {
   }, async ({ planId, dimension, status, evidenceIds, reason }) => { try { const checkpoint = await deps.taskService.updateCheckpoint(planId, dimension, status, evidenceIds, reason ?? null); const checklistPath = await deps.checklistWriter.write(planId); return result({ checkpoint, checklistPath }); } catch (error) { return errorResult(error); } });
 
   registerToolWithAlias('evaluate_quality_gate', {
-    description: 'Evaluate required acceptance checkpoints for a plan. A PASS is impossible while any required checkpoint is pending, failed, blocked, or missing valid evidence.',
+    description: 'Evaluate required acceptance checkpoints for a plan. A PASS is impossible while any required checkpoint is pending, failed, blocked, or missing valid evidence. On PASS, automatically returns a Conventional Commits 1.0.0 message (no push).',
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
     inputSchema: z.object({ planId: z.string().uuid() })
   }, async ({ planId }) => { try { return result(await deps.taskService.evaluateGate(planId)); } catch (error) { return errorResult(error); } });
+
+  registerToolWithAlias('prepare_commit_message', {
+    description: 'Generate a Conventional Commits 1.0.0 git commit message summarizing verified plan tasks and/or current workspace git changes without pushing (noPush: true). Use before finishing any task or final output.',
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+    inputSchema: z.object({
+      planId: z.string().uuid().optional(),
+      type: z.enum(commitTypes).optional(),
+      scope: z.string().min(1).max(32).optional(),
+      summary: z.string().min(3).max(200).optional(),
+      breakingChange: z.string().min(3).max(500).optional()
+    })
+  }, async input => {
+    try {
+      if (input.planId) {
+        const commit = await deps.taskService.buildConventionalCommit(input.planId, {
+          ...(input.type !== undefined ? { type: input.type } : {}),
+          ...(input.scope !== undefined ? { scope: input.scope } : {}),
+          ...(input.summary !== undefined ? { summary: input.summary } : {}),
+          ...(input.breakingChange !== undefined ? { breakingChange: input.breakingChange } : {})
+        });
+        return result({
+          ...commit,
+          finalOutputRequirement: 'MANDATORY: Include fullMessage in your final output. Do NOT run git push without explicit user authorization.'
+        });
+      }
+
+      const workingTree = deps.gitChangesReader
+        ? await deps.gitChangesReader.readWorkingTreeChanges()
+        : { isGitRepo: false, changedFiles: [] };
+      const summary = input.summary?.trim();
+      if (!summary && workingTree.changedFiles.length === 0) {
+        return errorResult(new Error('ValidationError: Provide planId, summary, or have uncommitted git changes in workspaceRoot to build a Conventional Commit message.'));
+      }
+      const commit = buildConventionalCommit({
+        title: summary || `update ${workingTree.changedFiles.slice(0, 2).join(', ')}`,
+        ...(summary ? { summaryPoints: [summary] } : {}),
+        changedFiles: workingTree.changedFiles,
+        ...(input.type !== undefined ? { type: input.type } : {}),
+        ...(input.scope !== undefined ? { scope: input.scope } : {}),
+        ...(input.breakingChange !== undefined ? { breakingChange: input.breakingChange } : {})
+      });
+      return result({
+        ...commit,
+        isGitRepo: workingTree.isGitRepo,
+        finalOutputRequirement: 'MANDATORY: Include fullMessage in your final output. Do NOT run git push without explicit user authorization.'
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
 
   registerToolWithAlias('increment_repair_iteration', {
     description: 'Consume one repair-loop iteration from the plan budget. If the budget is exhausted, the task must be escalated instead of looping indefinitely.',
@@ -732,7 +790,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
     title: 'Principal Orchestrator Workflow',
     description: 'Plan and coordinate a project task using parallel subagents, Skills, MCP tools and independent verification.',
     argsSchema: z.object({ request: z.string().min(10), projectRoot: z.string().optional() })
-  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig_create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig_acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence.` } }] }));
+  }, ({ request, projectRoot }) => ({ messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `Act as Principal Orchestrator. Create an execution plan for this request: ${request}\nWorkspace: ${projectRoot ?? deps.workspaceRoot}\nMaximum parallel tasks: ${deps.maxParallelTasks}. Never exceed this host delegation limit.\nUse craftrig_create_execution_plan, claim tasks with explicit ownedPaths (or acquire locks via craftrig_acquire_file_locks) before delegating dependency-ready tasks to host-native subagents, collect evidence, run localhost browser QA for UI changes, and do not pass quality gates without evidence. In every final output, ALWAYS include a Conventional Commits 1.0.0 git commit message (from craftrig_evaluate_quality_gate or craftrig_prepare_commit_message) summarizing the changes, and NEVER run git push.` } }] }));
 
   server.registerPrompt('craftrig-autopilot', {
     title: 'Craftrig Full-Blueprint Autopilot',
@@ -762,7 +820,7 @@ export function createMcpServer(deps: Dependencies): McpServer {
           '   - Require every subagent to return structured handoff (summary, changedFiles, contracts, decisions, testsRun) and pass it to craftrig_complete_task.',
           '   - If state === "needs_human": pause and present humanPrompt to the user.',
           '   - Repeat across ALL phases until state === "done".',
-          '3. At state === "done": present REQ-ID traceability matrix + skill/token telemetry. Never deploy without explicit user authorization.',
+          '3. At state === "done": present REQ-ID traceability matrix, skill/token telemetry, and MANDATORY Conventional Commits 1.0.0 git commit message (`conventionalCommit.fullMessage`) summarizing all changes — NEVER run `git push` or deploy without explicit user authorization.',
           '',
           `USER INPUT:\n${input}`
         ].join('\n')

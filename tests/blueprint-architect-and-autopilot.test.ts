@@ -170,6 +170,11 @@ test('AutopilotService runs multi-phase blueprint from dispatch -> structured ha
         assert.equal(step.gateStatus?.status, 'pass');
         assert.ok(step.traceability.length > 0);
         assert.ok(step.traceability.every(t => t.verified), 'Every REQ-ID must be verified with evidence');
+        assert.ok(step.conventionalCommit, 'Done state must include Conventional Commit message');
+        assert.equal(step.conventionalCommit.specVersion, '1.0.0');
+        assert.equal(step.conventionalCommit.noPush, true);
+        assert.match(step.conventionalCommit.fullMessage, /^(feat|fix|chore|refactor|docs|test|build|ci|perf|style)(\([a-z0-9-]+\))?!?: .+/);
+        assert.match(step.instructions, /NEVER run git push/i);
         assert.ok(sawVerifyState, 'Must have executed deterministic verify state');
         assert.ok(sawRepairState, 'Must have executed targeted repair state after simulated failure');
         return;
@@ -415,6 +420,9 @@ test('MCP server wires Blueprint Architect, ingest_blueprint, autopilot_next, ar
     const archived = JSON.parse(archiveRes.content[0].text);
     assert.ok(archived.archivePath.endsWith('.json.br'));
     assert.ok(archived.purged.removedTasks > 0);
+    assert.ok(archived.conventionalCommit, 'Archive output must include Conventional Commit message');
+    assert.equal(archived.conventionalCommit.noPush, true);
+    assert.match(archived.finalOutputRequirement, /Do NOT run git push/i);
 
     repo.close();
   } finally {

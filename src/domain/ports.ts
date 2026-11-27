@@ -29,6 +29,15 @@ export interface RepoScannerPort {
   scan(): Promise<DetectedRepoContext>;
 }
 
+export interface WorkingTreeChanges {
+  isGitRepo: boolean;
+  changedFiles: string[];
+}
+
+export interface GitChangesReaderPort {
+  readWorkingTreeChanges(): Promise<WorkingTreeChanges>;
+}
+
 export interface BlueprintArtifactWriterPort {
   write(blueprint: ProjectBlueprint, markdown: string): Promise<{ markdownPath: string; jsonPath: string }>;
 }

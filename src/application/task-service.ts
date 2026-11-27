@@ -5,7 +5,9 @@ import type {
   RequirementTraceabilityEntry,
   TaskHandoff
 } from '../domain/blueprint.js';
-import type { StateRepository } from '../domain/ports.js';
+import type { StateRepository, GitChangesReaderPort } from '../domain/ports.js';
+import type { ConventionalCommitArtifact } from '../domain/conventional-commit.js';
+import { buildPlanConventionalCommit, type CommitOverrides } from './commit-message-builder.js';
 import type {
   BatchClaimItem,
   BatchClaimResult,
@@ -153,7 +155,11 @@ export interface ListFileLocksFilter {
 }
 
 export class TaskService {
-  constructor(private readonly repository: StateRepository, private readonly planner = new TaskPlanner()) {}
+  constructor(
+    private readonly repository: StateRepository,
+    private readonly planner = new TaskPlanner(),
+    private readonly gitChangesReader?: GitChangesReaderPort
+  ) {}
 
   async createPlan(input: CreatePlanInput): Promise<{ plan: ExecutionPlan; tasks: TaskNode[]; checkpoints: QualityCheckpoint[] }> {
     const { plan, tasks } = this.planner.create(input);
@@ -740,7 +746,20 @@ export class TaskService {
     });
   }
 
-  async evaluateGate(planId: string): Promise<{ status: 'pass' | 'blocked'; missing: string[]; failed: string[]; checkpoints: QualityCheckpoint[] }> {
+  async buildConventionalCommit(planId: string, overrides: CommitOverrides = {}): Promise<ConventionalCommitArtifact> {
+    const snapshot = await this.getPlan(planId);
+    const traceability = await this.getRequirementTraceability(planId);
+    return buildPlanConventionalCommit(snapshot, traceability, this.gitChangesReader, overrides);
+  }
+
+  async evaluateGate(planId: string): Promise<{
+    status: 'pass' | 'blocked';
+    missing: string[];
+    failed: string[];
+    checkpoints: QualityCheckpoint[];
+    conventionalCommit?: ConventionalCommitArtifact;
+    finalOutputRequirement?: string;
+  }> {
     const snapshot = await this.getPlan(planId);
     const evidence = await this.getEvidenceForPlan(planId);
     const evidenceIds = new Set(evidence.map(item => item.id));
@@ -767,7 +786,19 @@ export class TaskService {
       });
     }).map(item => `${item.title} (stale evidence linked to non-completed task)`);
     const incomplete = missing.length + failed.length + invalidNA.length + passWithoutEvidence.length + staleEvidence.length > 0;
-    return { status: incomplete ? 'blocked' : 'pass', missing, failed: [...failed, ...invalidNA, ...passWithoutEvidence, ...staleEvidence], checkpoints };
+    if (incomplete) {
+      return { status: 'blocked', missing, failed: [...failed, ...invalidNA, ...passWithoutEvidence, ...staleEvidence], checkpoints };
+    }
+    const traceability = await this.getRequirementTraceability(planId);
+    const conventionalCommit = await buildPlanConventionalCommit(snapshot, traceability, this.gitChangesReader);
+    return {
+      status: 'pass',
+      missing,
+      failed: [],
+      checkpoints,
+      conventionalCommit,
+      finalOutputRequirement: 'MANDATORY: Include conventionalCommit.fullMessage in your final output to summarize all verified changes. Commit locally only if needed — NEVER run git push without explicit user authorization.'
+    };
   }
 
   async incrementRepairIteration(planId: string): Promise<{ repairIterations: number; maxRepairIterations: number }> {

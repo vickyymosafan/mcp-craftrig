@@ -10,6 +10,7 @@ import { LocalDevServerManager } from './infrastructure/runtime/local-dev-server
 import { FileSkillRegistry } from './infrastructure/skills/file-skill-registry.js';
 import { ModuleRegistry } from './infrastructure/catalog/module-registry.js';
 import { WorkspaceRepoScanner } from './infrastructure/discovery/repo-scanner.js';
+import { GitChangesReader } from './infrastructure/discovery/git-changes-reader.js';
 import { FileBlueprintArtifactWriter } from './infrastructure/persistence/blueprint-artifact-writer.js';
 import { TaskService } from './application/task-service.js';
 import { BlueprintArchitectService } from './application/blueprint-architect.js';
@@ -32,11 +33,12 @@ const { repository, selectedBackend } = createStateRepository({
   maxParallelTasks: runtimeConfig.maxParallelTasks,
   sqliteIdleCloseMs: runtimeConfig.sqliteIdleCloseMs
 });
-const taskService = new TaskService(repository, new TaskPlanner(runtimeConfig.maxRepairIterations));
+const gitChangesReader = new GitChangesReader(workspaceRoot);
+const taskService = new TaskService(repository, new TaskPlanner(runtimeConfig.maxRepairIterations), gitChangesReader);
 const repoScanner = new WorkspaceRepoScanner(workspaceRoot);
 const blueprintWriter = new FileBlueprintArtifactWriter(guard, workspaceRoot);
 const blueprintArchitect = new BlueprintArchitectService(repository, repoScanner, blueprintWriter);
-const autopilotService = new AutopilotService(taskService, runtimeConfig.maxParallelTasks);
+const autopilotService = new AutopilotService(taskService, runtimeConfig.maxParallelTasks, gitChangesReader);
 const inspector = new PlaywrightInspector();
 const devServer = new LocalDevServerManager(workspaceRoot, taskService);
 const skillRegistry = new FileSkillRegistry(path.join(projectRoot, '.agent', 'skills'));
@@ -67,5 +69,6 @@ await serveStdio(() => createMcpServer({
   checklistWriter,
   maxParallelTasks: runtimeConfig.maxParallelTasks,
   browserTimeoutMs: runtimeConfig.browserTimeoutMs,
-  evidenceQuotaBytes
+  evidenceQuotaBytes,
+  gitChangesReader
 }));
